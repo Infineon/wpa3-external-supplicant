@@ -26,8 +26,6 @@ The WPA3 External Supplicant consists of the following components:
 
 ## Additional Information
 
-- [WPA3 External Supplicant library reference guide](https://infineon.github.io/wpa3-external-supplicant/api_reference_manual/html/index.html)
-
 - [WPA3 External Supplicant version](./version.xml)
 
 ## Supported Software and Tools
