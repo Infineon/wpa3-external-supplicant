@@ -5,6 +5,9 @@ See the [README.md](./README.md) for a complete description of the WPA3 External
 
 ## Changelog
 
+### v1.1.0
+* Remove link to WPA3 External Supplicant library reference guide
+
 ### v1.0.0
 * Initial release
 * 11n WPA3-R3(Personal) Certification Passed
@@ -14,5 +17,7 @@ This version of the library was validated for compatibility with the following S
 
 | Software and Tools                                      | Version |
 | :---                                                    | :----:  |
-| ModusToolbox Software Environment                       | 2.4.0   |
+| ModusToolbox Software Environment                       | 3.0.0   |
 | GCC Compiler                                            | 9.3.1   |
+| IAR Compiler                                            | 9.3     |
+| ARM Compiler                                            | 6.16    |
