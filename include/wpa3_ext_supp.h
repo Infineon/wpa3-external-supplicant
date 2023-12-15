@@ -1,5 +1,5 @@
 /*
- * Copyright 2022, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2023, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -70,6 +70,9 @@
 #endif
 #endif /* WPA3_UNIT_TEST_ENABLED */
 
+#ifndef MBEDTLS_PRIVATE
+#define MBEDTLS_PRIVATE(member) member
+#endif
 
 #define WLAN_AUTH_FT             2
 #define WLAN_AUTH_SAE            3

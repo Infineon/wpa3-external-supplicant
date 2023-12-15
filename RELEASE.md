@@ -1,9 +1,12 @@
 # WPA3 External supplicant library
 
 ## What's Included?
-See the [README.md](./README.md) for a complete description of the WPA3 External Supplicant
+See the [README.md](./README.md) for a complete description of the WPA3 External Supplicant.
 
 ## Changelog
+
+### v1.2.0
+* Added support for Mbed TLS 3.4.0 version
 
 ### v1.1.0
 * Remove link to WPA3 External Supplicant library reference guide

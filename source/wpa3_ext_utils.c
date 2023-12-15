@@ -1,5 +1,5 @@
 /*
- * Copyright 2022, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2023, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -162,15 +162,15 @@ void wpa3_print_buf(uint8_t *buf, int len)
 void wpa3_print_mbedtls_mpi(mbedtls_mpi *n)
 {
     int i;
-    if (n->s == WPA3_DEFINE_MINUS)
+    if (n->MBEDTLS_PRIVATE(s) == WPA3_DEFINE_MINUS)
         WPA3_EXT_LOG_MSG(("- "));
-    for (i=(n->n)-1 ; i>=0; i--)
+    for (i=(n->MBEDTLS_PRIVATE(n))-1 ; i>=0; i--)
     {
         if (( (i+1) % 8 == 0) && ( i > 0 ))
         {
             WPA3_EXT_LOG_MSG(("\n"));
         }
-        WPA3_EXT_LOG_MSG(("%02lx ",n->p[i]));
+        WPA3_EXT_LOG_MSG(("%02lx ",n->MBEDTLS_PRIVATE(p)[i]));
     }
     WPA3_EXT_LOG_MSG(("\n"));
 }

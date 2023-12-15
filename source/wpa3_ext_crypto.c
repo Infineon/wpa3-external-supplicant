@@ -1,5 +1,5 @@
 /*
- * Copyright 2022, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2023, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -32,6 +32,90 @@
  */
 
 #include "wpa3_ext_supp.h"
+
+/*
+ * Misra coverity test doesn't pull dependency libraries so added below code under WPA3_EXT_NO_HARDWARE not defined.
+ * Misra coverity test code defines WPA3_EXT_NO_HARDWARE and definition for wpa3_crypto_random_number_generate()
+ * is added to stubs file.
+ */
+#ifndef WPA3_EXT_NO_HARDWARE
+#ifdef COMPONENT_4390X
+extern cy_rslt_t cy_prng_get_random( void* buffer, uint32_t buffer_length );
+#endif
+
+#if !defined COMPONENT_4390X
+#include "cyhal_trng.h"
+#endif
+
+#if !defined COMPONENT_4390X
+static int trng_get_bytes(cyhal_trng_t *obj, uint8_t *output, size_t length, size_t *output_length)
+{
+    uint32_t offset = 0;
+    /* If output is not word-aligned, write partial word */
+    uint32_t prealign = (uint32_t)((uintptr_t)output % sizeof(uint32_t));
+    if(prealign != 0)
+    {
+        uint32_t value = cyhal_trng_generate(obj);
+        uint32_t count = sizeof(uint32_t) - prealign;
+        memmove(&output[0], &value, count);
+        offset += count;
+    }
+    /* Write aligned full words */
+    for(; offset < length - (sizeof(uint32_t) - 1u); offset += sizeof(uint32_t))
+    {
+        *(uint32_t *)(&output[offset]) = cyhal_trng_generate(obj);
+    }
+    /* Write partial trailing word if requested */
+    if(offset < length)
+    {
+        uint32_t value = cyhal_trng_generate(obj);
+        uint32_t count = length - offset;
+        memmove(&output[offset], &value, count);
+        offset += count;
+    }
+    *output_length = offset;
+    return 0;
+}
+#endif
+
+/*
+ * This function generates random number and is passed as parameter to mbedtls_ecp_mul().
+ * This function is used by mbedtls library to randomize some intermediate results.
+ */
+static int wpa3_crypto_random_number_generate(void *data, unsigned char *output, size_t len)
+{
+#if defined(COMPONENT_4390X)
+    /* 43907 kits does not have TRNG module. Get the random
+     * number from wifi-mw-core internal PRNG API. */
+    cy_rslt_t result;
+    result = cy_prng_get_random(output, len);
+    if(result != CY_RSLT_SUCCESS)
+    {
+        return -1;
+    }
+#else
+    cyhal_trng_t obj;
+    int ret;
+    cy_rslt_t result;
+
+    result = cyhal_trng_init(&obj);
+    if(result != CY_RSLT_SUCCESS)
+    {
+        return -1;
+    }
+    size_t olen;
+    ret = trng_get_bytes(&obj, output, len, &olen);
+    if(ret != 0)
+    {
+        cyhal_trng_free(&obj);
+        return -1;
+    }
+
+    cyhal_trng_free(&obj);
+#endif
+    return 0;
+}
+#endif
 
 extern cy_rslt_t cy_wpa3_get_pfn_network( uint8_t * ssid, uint8_t *passphrase, uint8_t *pt );
 
@@ -442,7 +526,7 @@ cy_rslt_t wpa3_crypto_derive_pwe_from_pt(wpa3_supplicant_workspace_t *wksp)
      WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:  pwd_seed\n"));
      WPA3_EXT_HEX_BUF_DUMP((pwd_seed, sizeof(pwd_seed)));
 
-     /* pwdval = pwdval modulo (q – 1) + 1 */
+     /* pwdval = pwdval modulo (q  1) + 1 */
 
      /* q - 1 */
      MBEDTLS_MPI_CHK(mbedtls_mpi_sub_int(&q1, &(wksp->wpa3_crypto_ctxt->group.N), 1));
@@ -465,7 +549,7 @@ cy_rslt_t wpa3_crypto_derive_pwe_from_pt(wpa3_supplicant_workspace_t *wksp)
      /* PWE = scalar-op(pwdval, PT) */
      MBEDTLS_MPI_CHK(mbedtls_ecp_mul(&wksp->wpa3_crypto_ctxt->group,
                                      &wksp->wpa3_crypto_ctxt->pwe, &pwdval, &wksp->wpa3_crypto_ctxt->sta_pt_element,
-                                     NULL, NULL));
+                                     wpa3_crypto_random_number_generate, NULL));
 
      WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:H2E pwe before inverse"));
      WPA3_EXT_HEX_MPI_DUMP((&wksp->wpa3_crypto_ctxt->pwe.X));
@@ -561,7 +645,7 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:  pwd_seed\n"));
     WPA3_EXT_HEX_BUF_DUMP((pwd_seed, sizeof(pwd_seed)));
 
-    /* pwd-value = HKDF-Expand(pwd-seed, “SAE Hash to Element u1 P1”, len) */
+    /* pwd-value = HKDF-Expand(pwd-seed, SAE Hash to Element u1 P1, len) */
 
     ret = mbedtls_hkdf_expand((const mbedtls_md_info_t *) md_info,
             (const unsigned char *) pwd_seed, (size_t) sizeof(pwd_seed),
@@ -629,7 +713,7 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
         WPA3_EXT_LOG_MSG(("\n** WPA3-EXT-SUPP:P1 point VALID on ECP CURVE ret=%d **\n", ret));
     }
 
-    /* pwd-value = HKDF-Expand(pwd-seed, “SAE Hash to Element u2 P2”, len) */
+    /* pwd-value = HKDF-Expand(pwd-seed, SAE Hash to Element u2 P2, len) */
     ret = mbedtls_hkdf_expand((const mbedtls_md_info_t *) md_info,
             (const unsigned char *) pwd_seed, (size_t) sizeof(pwd_seed),
             (const unsigned char *) ("SAE Hash to Element u2 P2"),
@@ -1307,8 +1391,8 @@ int wpa3_crypto_point_inverse(const mbedtls_ecp_group *grp,
         MBEDTLS_MPI_CHK(mbedtls_ecp_copy(R, P));
     }
     /* In-place opposite */
-    if (mbedtls_mpi_cmp_int(&R->Y, 0) != ret) {
-        MBEDTLS_MPI_CHK(mbedtls_mpi_sub_mpi(&R->Y, &grp->P, &R->Y));
+    if (mbedtls_mpi_cmp_int(&R->MBEDTLS_PRIVATE(Y), 0) != ret) {
+        MBEDTLS_MPI_CHK(mbedtls_mpi_sub_mpi(&R->MBEDTLS_PRIVATE(Y), &grp->P, &R->MBEDTLS_PRIVATE(Y)));
     }
     cleanup: return (ret);
 }
@@ -1619,7 +1703,7 @@ cy_rslt_t wpa3_crypto_gen_scalar_and_element(
     MBEDTLS_MPI_CHK(
             mbedtls_ecp_mul(&crypto_ctxt->group,
                     &crypto_ctxt->sta_commit_element, &mask, &crypto_ctxt->pwe,
-                    NULL, NULL));
+                    wpa3_crypto_random_number_generate, NULL));
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:commit element before inverse"));
     WPA3_EXT_HEX_MPI_DUMP((&crypto_ctxt->sta_commit_element.X));
     WPA3_EXT_HEX_MPI_DUMP((&crypto_ctxt->sta_commit_element.Y));
@@ -1678,13 +1762,13 @@ cy_rslt_t wpa3_crypto_get_grp_id_scalar_element(
         len += WPA3_SAE_SCALAR_LEN;
 
         MBEDTLS_MPI_CHK(
-                mbedtls_mpi_write_binary( &(workspace->wpa3_crypto_ctxt->sta_commit_element.X), (unsigned char *)&buf[len], WPA3_SAE_SCALAR_LEN));
+                mbedtls_mpi_write_binary( &(workspace->wpa3_crypto_ctxt->sta_commit_element.MBEDTLS_PRIVATE(X)), (unsigned char *)&buf[len], WPA3_SAE_SCALAR_LEN));
         WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:STA Element dump\n"));
         WPA3_EXT_HEX_BUF_DUMP((&buf[len], WPA3_SAE_SCALAR_LEN));
         len += WPA3_SAE_SCALAR_LEN;
 
         MBEDTLS_MPI_CHK(
-                mbedtls_mpi_write_binary( &(workspace->wpa3_crypto_ctxt->sta_commit_element.Y), (unsigned char *)&buf[len], WPA3_SAE_SCALAR_LEN));
+                mbedtls_mpi_write_binary( &(workspace->wpa3_crypto_ctxt->sta_commit_element.MBEDTLS_PRIVATE(Y)), (unsigned char *)&buf[len], WPA3_SAE_SCALAR_LEN));
         WPA3_EXT_HEX_BUF_DUMP((&buf[len], WPA3_SAE_SCALAR_LEN));
         len += WPA3_SAE_SCALAR_LEN;
         WPA3_EXT_LOG_MSG(
@@ -1720,13 +1804,13 @@ cy_rslt_t wpa3_crypto_get_scalar_element(wpa3_supplicant_workspace_t* workspace,
         len += WPA3_SAE_SCALAR_LEN;
 
         MBEDTLS_MPI_CHK(
-                mbedtls_mpi_write_binary( &(workspace->wpa3_crypto_ctxt->sta_commit_element.X), (unsigned char *)&buf[len], WPA3_SAE_SCALAR_LEN));
+                mbedtls_mpi_write_binary( &(workspace->wpa3_crypto_ctxt->sta_commit_element.MBEDTLS_PRIVATE(X)), (unsigned char *)&buf[len], WPA3_SAE_SCALAR_LEN));
         WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:STA Element dump\n"));
         WPA3_EXT_HEX_BUF_DUMP((&buf[len], WPA3_SAE_SCALAR_LEN));
         len += WPA3_SAE_SCALAR_LEN;
 
         MBEDTLS_MPI_CHK(
-                mbedtls_mpi_write_binary( &(workspace->wpa3_crypto_ctxt->sta_commit_element.Y), (unsigned char *)&buf[len], WPA3_SAE_SCALAR_LEN));
+                mbedtls_mpi_write_binary( &(workspace->wpa3_crypto_ctxt->sta_commit_element.MBEDTLS_PRIVATE(Y)), (unsigned char *)&buf[len], WPA3_SAE_SCALAR_LEN));
         WPA3_EXT_HEX_BUF_DUMP((&buf[len], WPA3_SAE_SCALAR_LEN));
         len += WPA3_SAE_SCALAR_LEN;
         WPA3_EXT_LOG_MSG(
@@ -1836,7 +1920,7 @@ cy_rslt_t wpa3_crypto_compute_shared_secret(
     MBEDTLS_MPI_CHK(
             mbedtls_ecp_mul(&crypto_ctxt->group, &ecp_point,
                     &(workspace->wpa3_sae_context_info.peer_commit_scalar),
-                    &(crypto_ctxt->pwe), NULL, NULL));
+                    &(crypto_ctxt->pwe), wpa3_crypto_random_number_generate, NULL));
 
     /* temp_point =  m * (peer-Element) +  m * (ecp_point) */
     MBEDTLS_MPI_CHK(
@@ -1848,7 +1932,7 @@ cy_rslt_t wpa3_crypto_compute_shared_secret(
     MBEDTLS_MPI_CHK(
             mbedtls_ecp_mul(&crypto_ctxt->group, &ecp_point,
                     &(workspace->wpa3_crypto_ctxt->sta_private), &ecp_point,
-                    NULL, NULL));
+                    wpa3_crypto_random_number_generate, NULL));
 
     /* is point at infinity  check  */
     ret = mbedtls_ecp_is_zero(&ecp_point);
@@ -1862,7 +1946,7 @@ cy_rslt_t wpa3_crypto_compute_shared_secret(
 
     /* copy the ecp_point to buffer */
     MBEDTLS_MPI_CHK(
-            mbedtls_mpi_write_binary( &(ecp_point.X), (unsigned char *)k, WPA3_SAE_SCALAR_LEN));
+            mbedtls_mpi_write_binary( &(ecp_point.MBEDTLS_PRIVATE(X)), (unsigned char *)k, WPA3_SAE_SCALAR_LEN));
 
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:Dump of K \n"));
     WPA3_EXT_HEX_MPI_DUMP((&ecp_point.X));
@@ -2099,9 +2183,9 @@ cy_rslt_t wpa3_crypto_build_send_confirm_handshake(
 
     /* commit-element */
     MBEDTLS_MPI_CHK(
-            mbedtls_mpi_write_binary(&(wksp->wpa3_crypto_ctxt->sta_commit_element.X), (unsigned char *)element1, WPA3_SAE_SCALAR_LEN));
+            mbedtls_mpi_write_binary(&(wksp->wpa3_crypto_ctxt->sta_commit_element.MBEDTLS_PRIVATE(X)), (unsigned char *)element1, WPA3_SAE_SCALAR_LEN));
     MBEDTLS_MPI_CHK(
-            mbedtls_mpi_write_binary(&(wksp->wpa3_crypto_ctxt->sta_commit_element.Y), (unsigned char *)&element1[WPA3_SAE_SCALAR_LEN], WPA3_SAE_SCALAR_LEN));
+            mbedtls_mpi_write_binary(&(wksp->wpa3_crypto_ctxt->sta_commit_element.MBEDTLS_PRIVATE(Y)), (unsigned char *)&element1[WPA3_SAE_SCALAR_LEN], WPA3_SAE_SCALAR_LEN));
 
     addr[2] = element1;
     len[2] = WPA3_SAE_ELEMENT_LEN;
@@ -2113,9 +2197,9 @@ cy_rslt_t wpa3_crypto_build_send_confirm_handshake(
 
     /* commit-element */
     MBEDTLS_MPI_CHK(
-            mbedtls_mpi_write_binary(&(wksp->wpa3_sae_context_info.peer_commit_element.X), (unsigned char *)element2, WPA3_SAE_SCALAR_LEN));
+            mbedtls_mpi_write_binary(&(wksp->wpa3_sae_context_info.peer_commit_element.MBEDTLS_PRIVATE(X)), (unsigned char *)element2, WPA3_SAE_SCALAR_LEN));
     MBEDTLS_MPI_CHK(
-            mbedtls_mpi_write_binary(&(wksp->wpa3_sae_context_info.peer_commit_element.Y), (unsigned char *)&element2[WPA3_SAE_SCALAR_LEN], WPA3_SAE_SCALAR_LEN));
+            mbedtls_mpi_write_binary(&(wksp->wpa3_sae_context_info.peer_commit_element.MBEDTLS_PRIVATE(Y)), (unsigned char *)&element2[WPA3_SAE_SCALAR_LEN], WPA3_SAE_SCALAR_LEN));
 
     addr[4] = element2;
     len[4] = WPA3_SAE_ELEMENT_LEN;
@@ -2169,9 +2253,9 @@ cy_rslt_t wpa3_crypto_verify_confirm_message(wpa3_supplicant_workspace_t *wksp) 
 
     /* commit-element */
     MBEDTLS_MPI_CHK(
-            mbedtls_mpi_write_binary(&(wksp->wpa3_sae_context_info.peer_commit_element.X), (unsigned char *)element1, WPA3_SAE_SCALAR_LEN));
+            mbedtls_mpi_write_binary(&(wksp->wpa3_sae_context_info.peer_commit_element.MBEDTLS_PRIVATE(X)), (unsigned char *)element1, WPA3_SAE_SCALAR_LEN));
     MBEDTLS_MPI_CHK(
-            mbedtls_mpi_write_binary(&(wksp->wpa3_sae_context_info.peer_commit_element.Y), (unsigned char *)&element1[WPA3_SAE_SCALAR_LEN], WPA3_SAE_SCALAR_LEN));
+            mbedtls_mpi_write_binary(&(wksp->wpa3_sae_context_info.peer_commit_element.MBEDTLS_PRIVATE(Y)), (unsigned char *)&element1[WPA3_SAE_SCALAR_LEN], WPA3_SAE_SCALAR_LEN));
 
     addr[2] = element1;
     len[2] = WPA3_SAE_ELEMENT_LEN;
@@ -2183,9 +2267,9 @@ cy_rslt_t wpa3_crypto_verify_confirm_message(wpa3_supplicant_workspace_t *wksp) 
 
     /* commit-element */
     MBEDTLS_MPI_CHK(
-            mbedtls_mpi_write_binary(&(wksp->wpa3_crypto_ctxt->sta_commit_element.X), (unsigned char *)element2, WPA3_SAE_SCALAR_LEN));
+            mbedtls_mpi_write_binary(&(wksp->wpa3_crypto_ctxt->sta_commit_element.MBEDTLS_PRIVATE(X)), (unsigned char *)element2, WPA3_SAE_SCALAR_LEN));
     MBEDTLS_MPI_CHK(
-            mbedtls_mpi_write_binary(&(wksp->wpa3_crypto_ctxt->sta_commit_element.Y), (unsigned char *)&element2[WPA3_SAE_SCALAR_LEN], WPA3_SAE_SCALAR_LEN));
+            mbedtls_mpi_write_binary(&(wksp->wpa3_crypto_ctxt->sta_commit_element.MBEDTLS_PRIVATE(Y)), (unsigned char *)&element2[WPA3_SAE_SCALAR_LEN], WPA3_SAE_SCALAR_LEN));
 
     addr[4] = element2;
     len[4] = WPA3_SAE_ELEMENT_LEN;
