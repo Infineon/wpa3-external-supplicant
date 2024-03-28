@@ -1,5 +1,5 @@
 /*
- * Copyright 2023, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2024, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -39,43 +39,8 @@
  * is added to stubs file.
  */
 #ifndef WPA3_EXT_NO_HARDWARE
-#ifdef COMPONENT_4390X
-extern cy_rslt_t cy_prng_get_random( void* buffer, uint32_t buffer_length );
-#endif
-
-#if !defined COMPONENT_4390X
-#include "cyhal_trng.h"
-#endif
-
-#if !defined COMPONENT_4390X
-static int trng_get_bytes(cyhal_trng_t *obj, uint8_t *output, size_t length, size_t *output_length)
-{
-    uint32_t offset = 0;
-    /* If output is not word-aligned, write partial word */
-    uint32_t prealign = (uint32_t)((uintptr_t)output % sizeof(uint32_t));
-    if(prealign != 0)
-    {
-        uint32_t value = cyhal_trng_generate(obj);
-        uint32_t count = sizeof(uint32_t) - prealign;
-        memmove(&output[0], &value, count);
-        offset += count;
-    }
-    /* Write aligned full words */
-    for(; offset < length - (sizeof(uint32_t) - 1u); offset += sizeof(uint32_t))
-    {
-        *(uint32_t *)(&output[offset]) = cyhal_trng_generate(obj);
-    }
-    /* Write partial trailing word if requested */
-    if(offset < length)
-    {
-        uint32_t value = cyhal_trng_generate(obj);
-        uint32_t count = length - offset;
-        memmove(&output[offset], &value, count);
-        offset += count;
-    }
-    *output_length = offset;
-    return 0;
-}
+#ifdef COMPONENT_MBEDTLS
+#include "entropy_poll.h"
 #endif
 
 /*
@@ -84,36 +49,13 @@ static int trng_get_bytes(cyhal_trng_t *obj, uint8_t *output, size_t length, siz
  */
 static int wpa3_crypto_random_number_generate(void *data, unsigned char *output, size_t len)
 {
-#if defined(COMPONENT_4390X)
-    /* 43907 kits does not have TRNG module. Get the random
-     * number from wifi-mw-core internal PRNG API. */
-    cy_rslt_t result;
-    result = cy_prng_get_random(output, len);
-    if(result != CY_RSLT_SUCCESS)
-    {
-        return -1;
-    }
-#else
-    cyhal_trng_t obj;
-    int ret;
-    cy_rslt_t result;
-
-    result = cyhal_trng_init(&obj);
-    if(result != CY_RSLT_SUCCESS)
-    {
-        return -1;
-    }
+#if defined(COMPONENT_MBEDTLS)
     size_t olen;
-    ret = trng_get_bytes(&obj, output, len, &olen);
-    if(ret != 0)
-    {
-        cyhal_trng_free(&obj);
-        return -1;
-    }
-
-    cyhal_trng_free(&obj);
+    return mbedtls_hardware_poll(data, output, len, &olen);
+#else
+    WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:device not supported", -1));
+    return -1;
 #endif
-    return 0;
 }
 #endif
 

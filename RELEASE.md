@@ -5,6 +5,9 @@ See the [README.md](./README.md) for a complete description of the WPA3 External
 
 ## Changelog
 
+### v1.2.1
+* Added changes to eliminate use of HAL trng APIs
+
 ### v1.2.0
 * Added support for Mbed TLS 3.4.0 version
 
@@ -20,7 +23,7 @@ This version of the library was validated for compatibility with the following S
 
 | Software and Tools                                      | Version |
 | :---                                                    | :----:  |
-| ModusToolbox Software Environment                       | 3.0.0   |
-| GCC Compiler                                            | 9.3.1   |
-| IAR Compiler                                            | 9.3     |
+| ModusToolbox Software Environment                       | 3.2     |
+| GCC Compiler                                            | 11.3.1  |
+| IAR Compiler                                            | 9.40.2  |
 | ARM Compiler                                            | 6.16    |
