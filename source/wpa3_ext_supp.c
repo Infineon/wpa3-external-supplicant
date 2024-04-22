@@ -1496,8 +1496,10 @@ void wpa3_auth_req_callbackfunc ( void *result_ptr, uint32_t len, whd_auth_statu
                 /* post an event  WPA3_SUPPLICANT_EVENT_AUTH_REQ to supplicant */
                 WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:auth_status=%d ..calling wpa3_supplicant_send_event\n", status));
                 wpa3_supplicant_send_event(wksp, &msg);
-            } /* end of if */
-         } /* end of else */
+            } else {
+                mbedtls_free(msg.data);
+            }
+        }
     }
 }
 
