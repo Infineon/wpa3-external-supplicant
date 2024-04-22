@@ -1538,13 +1538,13 @@ void wpa3_auth_join_callback (cy_wcm_event_t event, cy_wcm_event_data_t *event_d
     {
         case CY_WCM_EVENT_CONNECTING:
             WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:CY_WCM_EVENT_CONNECTING\n"));
+            break;
+        case CY_WCM_EVENT_CONNECTED:
+            WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:CY_WCM_EVENT_CONNECTED\n"));
             if ( wksp != NULL )
             {
                 wpa3_sae_cleanup_workspace();
             }
-            break;
-        case CY_WCM_EVENT_CONNECTED:
-            WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:CY_WCM_EVENT_CONNECTED\n"));
             break;
         case CY_WCM_EVENT_CONNECT_FAILED:
             WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:CY_WCM_EVENT_CONNECT_FAILED\n"));
@@ -1560,7 +1560,7 @@ void wpa3_auth_join_callback (cy_wcm_event_t event, cy_wcm_event_data_t *event_d
             WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:CY_WCM_EVENT_DISCONNECTED\n"));
             break;
         case CY_WCM_EVENT_IP_CHANGED:
-            WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:CY_WCM_EVENT_CONNECTING\n"));
+            WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:CY_WCM_EVENT_IP_CHANGED\n"));
             break;
         case CY_WCM_EVENT_INITIATED_RETRY:
             WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:CY_WCM_EVENT_INITIATED_RETRY\n"));
