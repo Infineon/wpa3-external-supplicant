@@ -212,8 +212,11 @@ typedef CYPRESS_PACKED(struct)
 /** struct wpa3_sae_context_info_t (date) for handling SAE context information */
 typedef struct
 {
+#ifdef COMPONENT_WOLFSSL
+#else
     mbedtls_mpi peer_commit_scalar;             /**< peer Commit scalar    */
     mbedtls_ecp_point peer_commit_element;      /**< peer commit element   */
+#endif
     uint16_t peer_group_id;                     /**< peer Group ID         */
     uint16_t sndconfirm;                        /**< STA send confirm      */
     uint16_t sc;                                /**< sync variable         */
