@@ -153,7 +153,9 @@ void wpa3_print_buf(uint8_t *buf, int len)
     for ( i = 0; i < len ; i++ )
     {
         if (( i % 16 == 0 ) && (i != 0))
+        {
             WPA3_EXT_LOG_MSG(("\n"));
+        }
         WPA3_EXT_LOG_MSG(("%02x ", buf[i]));
     }
     WPA3_EXT_LOG_MSG(("\n WPA3-EXT-SUPP:buf data end >>>\n"));
@@ -163,7 +165,9 @@ void wpa3_print_mbedtls_mpi(mbedtls_mpi *n)
 {
     int i;
     if (n->MBEDTLS_PRIVATE(s) == WPA3_DEFINE_MINUS)
+    {
         WPA3_EXT_LOG_MSG(("- "));
+    }
     for (i=(n->MBEDTLS_PRIVATE(n))-1 ; i>=0; i--)
     {
         if (( (i+1) % 8 == 0) && ( i > 0 ))

@@ -152,7 +152,7 @@
 #define WPA3_SAE_RX_FRAME_MIN_LENGTH 30 /* 24 bytes 802.11 header + 6 bytes of Authentication header */
 
 #define WPA3_MAX_SEMA_COUNT          1
-#define WPA3_SCAN_SEMAPHORE_TIMEOUT  3000
+#define WPA3_SCAN_SEMAPHORE_TIMEOUT  5000
 
 /* management */
 #define WLAN_FC_STYPE_AUTH      11

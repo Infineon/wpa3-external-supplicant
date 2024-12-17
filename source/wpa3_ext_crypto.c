@@ -390,6 +390,8 @@ cy_rslt_t wpa3_crypto_start_pwe_generation(wpa3_supplicant_workspace_t *wksp) {
     mbedtls_mpi_free(&pycomp);
     mbedtls_mpi_free(&py);
     mbedtls_mpi_free(&ysqr_saved);
+    mbedtls_mpi_free(&randpass);
+    mbedtls_mpi_free(&one);
     return res;
 }
 
@@ -1086,7 +1088,7 @@ cy_rslt_t wpa3_cyrpto_sswu_algo(wpa3_supplicant_workspace_t *wksp,
     mbedtls_mpi_free(&gx2);
     mbedtls_mpi_free(&x1_tmp);
     mbedtls_mpi_free(&x2_tmp);
-    mbedtls_mpi_init(&x2_tmp1);
+    mbedtls_mpi_free(&x2_tmp1);
     mbedtls_mpi_free(&x2);
     mbedtls_mpi_free(&x3);
     mbedtls_mpi_free(&ax1);

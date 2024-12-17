@@ -5,6 +5,10 @@ See the [README.md](./README.md) for a complete description of the WPA3 External
 
 ## Changelog
 
+### v1.2.2
+* Increased scan semaphore timeout to incorporate 6G scanning and AP discovery time
+* Minor bug fixes
+
 ### v1.2.1
 * Added changes to eliminate use of HAL trng APIs
 
