@@ -389,6 +389,7 @@ cy_rslt_t wpa3_crypto_start_pwe_generation(wpa3_supplicant_workspace_t *wksp) {
     mbedtls_mpi_free(&ycomp);
     mbedtls_mpi_free(&pycomp);
     mbedtls_mpi_free(&py);
+    mbedtls_mpi_free(&randpass);
     mbedtls_mpi_free(&ysqr_saved);
     mbedtls_mpi_free(&randpass);
     mbedtls_mpi_free(&one);
@@ -1300,7 +1301,8 @@ bool wpa3_cyrpto_is_quadratic_residue_blind(uint8_t *qr_buf, uint8_t *qnr_buf,
                 mbedtls_mpi_exp_mod(&num, &num, &unity, &ecp_grp->P, NULL));
 
         if (wpa3_crypto_mpi_legendre(&num, &ecp_grp->P) == 1) {
-            return true;
+            ret = true;
+            goto cleanup;
         }
     } else {
         /*  num = num * qnr  */
@@ -1311,7 +1313,8 @@ bool wpa3_cyrpto_is_quadratic_residue_blind(uint8_t *qr_buf, uint8_t *qnr_buf,
                 mbedtls_mpi_exp_mod(&num, &num, &unity, &ecp_grp->P, NULL));
 
         if (wpa3_crypto_mpi_legendre(&num, &ecp_grp->P) == -1) {
-            return true;
+            ret = true;
+            goto cleanup;
         }
     }
 
@@ -1461,9 +1464,12 @@ int wpa3_crypto_deinit(wpa3_supplicant_workspace_t *wksp) {
     mbedtls_mpi_free(&wksp->wpa3_crypto_ctxt->sta_sae_rand);
     mbedtls_ctr_drbg_free(&wksp->wpa3_crypto_ctxt->ctr_drbg);
     mbedtls_entropy_free(&wksp->wpa3_crypto_ctxt->entropy);
-    memset(wksp->wpa3_crypto_ctxt, 0, sizeof(wpa3_crypto_context_info_t));
+
+    /* Deinitialize ECP group */
+    mbedtls_ecp_group_free(&wksp->wpa3_crypto_ctxt->group);
 
     if (wksp->wpa3_crypto_ctxt != NULL) {
+        memset(wksp->wpa3_crypto_ctxt, 0, sizeof(wpa3_crypto_context_info_t));
         free(wksp->wpa3_crypto_ctxt);
     }
     return ret;
