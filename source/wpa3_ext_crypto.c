@@ -1,5 +1,5 @@
 /*
- * Copyright 2024, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2025, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -40,7 +40,7 @@
  */
 #ifndef WPA3_EXT_NO_HARDWARE
 #ifdef COMPONENT_MBEDTLS
-#include "entropy_poll.h"
+extern int mbedtls_hardware_poll( void *data, unsigned char *output, size_t len, size_t *olen );
 #endif
 
 /*

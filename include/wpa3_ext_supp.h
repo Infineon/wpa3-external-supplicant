@@ -1,5 +1,5 @@
 /*
- * Copyright 2024, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2025, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -41,12 +41,12 @@
 #include "whd_types.h"
 #include "whd_wlioctl.h"
 #include "whd_endian.h"
-#include "bignum.h"
-#include "ctr_drbg.h"
-#include "entropy.h"
-#include "hmac_drbg.h"
-#include "ecdh.h"
-#include "hkdf.h"
+#include "mbedtls/bignum.h"
+#include "mbedtls/ctr_drbg.h"
+#include "mbedtls/entropy.h"
+#include "mbedtls/hmac_drbg.h"
+#include "mbedtls/ecdh.h"
+#include "mbedtls/hkdf.h"
 #include "whd_buffer_api.h"
 #include "cy_wcm.h"
 #else

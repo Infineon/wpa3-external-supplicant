@@ -5,6 +5,9 @@ See the [README.md](./README.md) for a complete description of the WPA3 External
 
 ## Changelog
 
+### v1.2.3
+* Minor bug fixes
+
 ### v1.2.2
 * Increased scan semaphore timeout to incorporate 6G scanning and AP discovery time
 * Minor bug fixes
@@ -27,7 +30,7 @@ This version of the library was validated for compatibility with the following S
 
 | Software and Tools                                      | Version |
 | :---                                                    | :----:  |
-| ModusToolbox Software Environment                       | 3.2     |
+| ModusToolbox Software Environment                       | 3.4     |
 | GCC Compiler                                            | 11.3.1  |
-| IAR Compiler                                            | 9.40.2  |
-| ARM Compiler                                            | 6.16    |
+| IAR Compiler                                            | 9.50.2  |
+| ARM Compiler                                            | 6.22    |
