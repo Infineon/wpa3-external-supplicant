@@ -48,12 +48,17 @@
 
 /** This function initializes the WPA3 External Supplicant middleware library by initializing following
  *   * i.   Initializes the WPA3 External Supplicant
- *   * ii.  Initializes the WAP3 Crypto Context information
- *   * iii. Loads the Mbed TLS ECP Group
+ *   * ii.  Initializes the WPA3 Crypto Context information
  *
  * @return cy_rslt_t : CY_RSLT_SUCCESS
  *                   : WPA3_EXT_SUPP_ERROR
   *******************************************************************************/
 cy_rslt_t wpa3_supplicant_sae_start (uint8_t *ssid, uint8_t ssid_len, uint8_t *passphrase, uint8_t passphrase_len);
+
+/** This function waits for the SAE handshake completion and performs the cleanup (Success/Fail/Timeout)
+ *
+ * @return
+  *******************************************************************************/
+void wpa3_supplicant_sae_cleanup(void);
 
 /** \} group_wpa3_ext_supplicant_wcm_interface_function */

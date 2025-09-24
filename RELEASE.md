@@ -5,6 +5,10 @@ See the [README.md](./README.md) for a complete description of the WPA3 External
 
 ## Changelog
 
+### v1.3.0
+* Added support for PSOC&trade; Edge E84 (PSE84) platform.
+* Enabled LLVM_ARM toolchain support for PSE84 platform.
+
 ### v1.2.3
 * Minor bug fixes
 
@@ -30,7 +34,9 @@ This version of the library was validated for compatibility with the following S
 
 | Software and Tools                                      | Version |
 | :---                                                    | :----:  |
-| ModusToolbox Software Environment                       | 3.4     |
-| GCC Compiler                                            | 11.3.1  |
-| IAR Compiler                                            | 9.50.2  |
-| ARM Compiler                                            | 6.22    |
+| ModusToolbox&trade; software                            | 3.6     |
+| ModusToolbox&trade; Device Configurator                 | 5.50.0  |
+| GCC Compiler                                            | 14.2.1  |
+| IAR Compiler (only for ModusToolbox&trade;)             | 9.50.2  |
+| Arm® Compiler 6                                         | 6.22    |
+| LLVM compiler                                           | 19.1.5  |

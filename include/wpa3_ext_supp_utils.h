@@ -51,19 +51,19 @@
 #endif  /* defined(__ICCARM__) */
 #endif /* CYPRESS_WEAK */
 
-#define WPA3_EXT_SUPP_RSLT_SUCCESS 0
-#define WPA3_EXT_SUPP_RSLT_NO_MEM  1
-#define WPA3_EXT_SUPP_RSLT_AUTH_EXCHG_FAIL 2
-#define WPA3_EXT_SUPP_RSLT_AUTH_BAD_ALGO 3
+#define WPA3_EXT_SUPP_RSLT_SUCCESS                    0
+#define WPA3_EXT_SUPP_RSLT_NO_MEM                     1
+#define WPA3_EXT_SUPP_RSLT_AUTH_EXCHG_FAIL            2
+#define WPA3_EXT_SUPP_RSLT_AUTH_BAD_ALGO              3
 #define WPA3_EXT_SUPP_RSLT_SCALAR_ELEMENT_RANGE_ERROR 4
-#define WPA3_EXT_SUPP_ERROR 5
-#define WPA3_EXT_CRYPTO_ERROR 6
-#define WPA3_EXT_PWE_GEN_FAILED 7
-#define WPA3_EXT_SUPP_CONFIRM_VERIFY_FAILURE  9
-#define WPA3_EXT_SUPP_SILENTLY_DISCARD 10
+#define WPA3_EXT_SUPP_ERROR                           5
+#define WPA3_EXT_CRYPTO_ERROR                         6
+#define WPA3_EXT_PWE_GEN_FAILED                       7
+#define WPA3_EXT_SUPP_CONFIRM_VERIFY_FAILURE          9
+#define WPA3_EXT_SUPP_SILENTLY_DISCARD                10
 
-#define WPA3_DEFINE_PLUS         1      /**< positive sign bit */
-#define WPA3_DEFINE_MINUS       -1      /**< negative sign bit */
+#define WPA3_DEFINE_PLUS                              1      /**< positive sign bit */
+#define WPA3_DEFINE_MINUS                            -1      /**< negative sign bit */
 
 //#define WPA3_EXT_LOG_ENABLE
 //#define WPA3_EXT_SUPPLICANT_DEBUG
@@ -77,12 +77,28 @@
 //#define WPA3_EXT_HEX_LOG_ENABLE
 
 #ifdef WPA3_EXT_HEX_LOG_ENABLE
-#define WPA3_EXT_HEX_MPI_DUMP(args) {wpa3_print_mbedtls_mpi args; }
-#define WPA3_EXT_HEX_BUF_DUMP(args) {wpa3_print_buf args; }
+#define WPA3_EXT_HEX_BIGNUM_DUMP(args)      {wpa3_print_big_number args; }
+#define WPA3_EXT_HEX_BUF_DUMP(args)         {wpa3_print_buf args; }
 #else
-#define WPA3_EXT_HEX_MPI_DUMP(args)
+#define WPA3_EXT_HEX_BIGNUM_DUMP(args)
 #define WPA3_EXT_HEX_BUF_DUMP(args)
 #endif
+
+
+#define WPA3_EXT_HEX_BUF_DUMP_WITH_LABEL(label, arr, arr_len)   \
+do                                                              \
+{                                                               \
+    WPA3_EXT_LOG_MSG(("%s:\n", label));                         \
+    WPA3_EXT_HEX_BUF_DUMP((arr, arr_len));	                    \
+}while(0)
+
+#define WPA3_EXT_BIGNUM_DUMP_WITH_LABEL(label, bignum)          \
+do                                                              \
+{                                                               \
+    WPA3_EXT_LOG_MSG(("%s:\n", label));                         \
+    WPA3_EXT_HEX_BIGNUM_DUMP((bignum));                         \
+}while(0)
+
 
 /** This function allocates buffer
  * @param   buf               : The pointer to the whd buffer
@@ -125,11 +141,11 @@ bool wpa3_is_buf_val_odd(uint8_t * buf, uint16_t len);
  *******************************************************************************/
 void wpa3_print_buf(uint8_t *buf, int len);
 
-/** This function prints the mbedtls_mpi
- * @param   n       : The pointer to mbedtls_mpi
+/** This function prints the big number
+ * @param   bignum  : The pointer to big number
  *
  *******************************************************************************/
-void wpa3_print_mbedtls_mpi(mbedtls_mpi *n);
+void wpa3_print_big_number(void *bignum);
 
 /** This function compares values in constant time.
  * @param  a        : The value of a

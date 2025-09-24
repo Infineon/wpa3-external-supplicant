@@ -161,24 +161,6 @@ void wpa3_print_buf(uint8_t *buf, int len)
     WPA3_EXT_LOG_MSG(("\n WPA3-EXT-SUPP:buf data end >>>\n"));
 }
 
-void wpa3_print_mbedtls_mpi(mbedtls_mpi *n)
-{
-    int i;
-    if (n->MBEDTLS_PRIVATE(s) == WPA3_DEFINE_MINUS)
-    {
-        WPA3_EXT_LOG_MSG(("- "));
-    }
-    for (i=(n->MBEDTLS_PRIVATE(n))-1 ; i>=0; i--)
-    {
-        if (( (i+1) % 8 == 0) && ( i > 0 ))
-        {
-            WPA3_EXT_LOG_MSG(("\n"));
-        }
-        WPA3_EXT_LOG_MSG(("%02lx ",n->MBEDTLS_PRIVATE(p)[i]));
-    }
-    WPA3_EXT_LOG_MSG(("\n"));
-}
-
 void wpa3_print_state(uint8_t state)
 {
    switch(state)
@@ -231,3 +213,71 @@ void wpa3_print_event(uint8_t event)
            break;
     }/* end of switch */
 }
+
+/* TODO : Move to crypto.c */
+#if defined (COMPONENT_MBEDTLS)
+
+void wpa3_print_big_number(void *bignum)
+{
+    int i;
+    mbedtls_mpi *n = (mbedtls_mpi*)bignum;
+
+    if (n != NULL)
+    {
+        if (n->MBEDTLS_PRIVATE(s) == WPA3_DEFINE_MINUS)
+        {
+            WPA3_EXT_LOG_MSG(("- "));
+        }
+        for (i=(n->MBEDTLS_PRIVATE(n))-1 ; i>=0; i--)
+        {
+            if (( (i+1) % 8 == 0) && ( i > 0 ))
+            {
+                WPA3_EXT_LOG_MSG(("\n"));
+            }
+            WPA3_EXT_LOG_MSG(("%02lx ",n->MBEDTLS_PRIVATE(p)[i]));
+        }
+        WPA3_EXT_LOG_MSG(("\n"));
+    }
+}
+#elif defined (COMPONENT_NETXSECURE)
+
+void wpa3_print_big_number(void *bignum)
+{
+    UCHAR buffer[128];
+    UINT size = 0;
+    UINT status;
+    NX_CRYPTO_HUGE_NUMBER *num = (NX_CRYPTO_HUGE_NUMBER *)bignum;
+
+    if (num == NULL)
+    {
+        return;
+    }
+
+    status = _nx_crypto_huge_number_extract(num, buffer, sizeof(buffer), &size);
+    if (status != 0)
+    {
+        WPA3_EXT_LOG_MSG(("%s: Extraction failed (status=%u)\n", __func__, status));
+        return;
+    }
+
+    for (UINT i = 0; i < size; i++)
+    {
+        if ((i != 0) && (i % 4 == 0))
+        {
+            WPA3_EXT_LOG_MSG((" "));
+            if (i % 32 == 0)
+            {
+                WPA3_EXT_LOG_MSG(("\n"));
+            }
+        }
+        WPA3_EXT_LOG_MSG(("%02x", buffer[i]));
+    }
+    WPA3_EXT_LOG_MSG(("\n"));
+}
+
+#else
+void wpa3_print_big_number(void *bignum)
+{
+    WPA3_EXT_LOG_MSG(("Logging not supported\n"));
+}
+#endif

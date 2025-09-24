@@ -54,9 +54,10 @@ void wpa3_sae_statemachine ( cy_thread_arg_t arg )
     wpa3_supplicant_workspace_t* workspace = (wpa3_supplicant_workspace_t*)arg;
     wpa3_supplicant_rtos_info_t* rtos_info = (wpa3_supplicant_rtos_info_t*)workspace->wpa3_rtos_info;
     wpa3_supplicant_event_message_t message;
+    cy_rslt_t cy_queue_result = CY_RSLT_SUCCESS;
+
 
     workspace->wpa3_state = WPA3_SUPPLICANT_NOTHING_STATE;
-    cy_rslt_t cy_queue_result;
 
     WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:wpa3_sae_statemachine thread started\n"));
 
@@ -1111,21 +1112,25 @@ cy_rslt_t wpa3_supplicant_init_pt_workspace ( wpa3_supplicant_workspace_t ** wks
     }
     memset(workspace, 0, sizeof(wpa3_supplicant_workspace_t));
 
-    /* Initialize WPA3 SAE context info */
-    result = wpa3_supplicant_init_sae_context_info(workspace);
-    if ( result != CY_RSLT_SUCCESS )
-    {
-        WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:wpa3_supplicant_init_sae_context_info failed\n"));
-        result = WPA3_EXT_SUPP_ERROR;
-    }
-
     /* Initialize crypto for WPA3 */
     result = wpa3_crypto_init(workspace);
     if ( result != CY_RSLT_SUCCESS )
     {
         WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:wpa3_crypto_init failed\n"));
-        result = WPA3_EXT_CRYPTO_ERROR;
+        free(workspace);
+        return WPA3_EXT_CRYPTO_ERROR;
     }
+
+    /* Initialize WPA3 SAE context info */
+    result = wpa3_supplicant_init_sae_context_info(workspace);
+    if ( result != CY_RSLT_SUCCESS )
+    {
+        WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:wpa3_supplicant_init_sae_context_info failed\n"));
+        wpa3_crypto_deinit(workspace);
+        free(workspace);
+        return WPA3_EXT_SUPP_ERROR;
+    }
+
     *wksp = workspace;
     return result;
 }
@@ -1154,6 +1159,30 @@ cy_rslt_t wpa3_supplicant_deinit_pt_workspace(wpa3_supplicant_workspace_t *wksp)
     wpa3_sae_set_workspace(NULL);
     WPA3_EXT_LOG_MSG(("***WPA3-EXT-SUPP:SAE workspace deleted*** \n"));
     return result;
+}
+
+/**
+ * @brief Waits for WPA3 SAE supplicant completion and cleans up workspace if needed.
+ *
+ * This function checks the current workspace and triggers cleanup or deinitialization
+ * if the workspace cleanup has not been initiated or completed.
+ */
+void wpa3_supplicant_sae_cleanup(void)
+{
+    wpa3_supplicant_workspace_t *wksp = NULL;
+
+    wksp = wpa3_sae_get_workspace();
+    if(wksp)
+    {
+        if (wpa3_sae_workspace_cleanup_initiated == false)
+        {
+            wpa3_sae_cleanup_workspace();
+        }
+        else  if ( wpa3_sae_supplicant_deinit_done == false)
+        {
+            wpa3_supplicant_deinit_workspace(wksp);
+        }
+    }
 }
 
 cy_rslt_t wpa3_supplicant_sae_start (uint8_t *ssid, uint8_t ssid_len, uint8_t *passphrase, uint8_t passphrase_len)
@@ -1297,15 +1326,11 @@ cy_rslt_t wpa3_supplicant_init_workspace ( wpa3_supplicant_workspace_t ** wksp)
         WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:WHD get interface failed result=%lx\n", result));
     }
 
-    /* Initialize WPA3 SAE context info */
-    result = wpa3_supplicant_init_sae_context_info(workspace);
+    /* Initialize crypto for WPA3 */
+    result = wpa3_crypto_init(workspace);
     if ( result != CY_RSLT_SUCCESS )
     {
-        WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:wpa3_supplicant_init_sae_context_info failed\n"));
-
-        mbedtls_mpi_free(&(workspace->wpa3_sae_context_info.peer_commit_scalar));
-        mbedtls_ecp_point_free(&(workspace->wpa3_sae_context_info.peer_commit_element));
-
+        WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:wpa3_crypto_init failed\n"));
         /* de-init queue */
         cy_rtos_deinit_queue(&(workspace->wpa3_rtos_info->event_queue));
         /* de-init timer */
@@ -1314,15 +1339,27 @@ cy_rslt_t wpa3_supplicant_init_workspace ( wpa3_supplicant_workspace_t ** wksp)
 
         free(workspace->wpa3_rtos_info);
         free(workspace);
-        result = WPA3_EXT_SUPP_ERROR;
+        result = WPA3_EXT_CRYPTO_ERROR;
     }
 
-    /* Initialize crypto for WPA3 */
-    result = wpa3_crypto_init(workspace);
+    /* Initialize WPA3 SAE context info */
+    result = wpa3_supplicant_init_sae_context_info(workspace);
     if ( result != CY_RSLT_SUCCESS )
     {
-        WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:wpa3_crypto_init failed\n"));
-        result = WPA3_EXT_CRYPTO_ERROR;
+        WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:wpa3_supplicant_init_sae_context_info failed\n"));
+
+        /* de-init queue */
+        cy_rtos_deinit_queue(&(workspace->wpa3_rtos_info->event_queue));
+        /* de-init timer */
+        cy_rtos_deinit_timer(&(workspace->wpa3_sae_timer));
+        cy_rtos_deinit_semaphore(&wpa3_scan_semaphore);
+
+        /* de-init crypto */
+        wpa3_crypto_deinit(workspace);
+
+        free(workspace->wpa3_rtos_info);
+        free(workspace);
+        result = WPA3_EXT_SUPP_ERROR;
     }
 
     /* register callback with WCM */
@@ -1338,28 +1375,6 @@ cy_rslt_t wpa3_supplicant_init_workspace ( wpa3_supplicant_workspace_t ** wksp)
     wpa3_sae_supplicant_deinit_done = false;
     wpa3_sae_workspace_cleanup_initiated = false;
     return result;
-}
-
-cy_rslt_t wpa3_supplicant_init_sae_context_info(wpa3_supplicant_workspace_t *wksp)
-{
-    if ( wksp == NULL )
-    {
-        return WPA3_EXT_SUPP_ERROR;
-    }
-    mbedtls_mpi_init(&(wksp->wpa3_sae_context_info.peer_commit_scalar));
-    mbedtls_ecp_point_init(&(wksp->wpa3_sae_context_info.peer_commit_element));
-    return CY_RSLT_SUCCESS;
-}
-
-cy_rslt_t wpa3_supplicant_deinit_sae_context_info(wpa3_supplicant_workspace_t *wksp)
-{
-    if ( wksp == NULL )
-    {
-        return WPA3_EXT_SUPP_ERROR;
-    }
-    mbedtls_mpi_free(&(wksp->wpa3_sae_context_info.peer_commit_scalar));
-    mbedtls_ecp_point_free(&(wksp->wpa3_sae_context_info.peer_commit_element));
-    return CY_RSLT_SUCCESS;
 }
 
 cy_rslt_t wpa3_supplicant_deinit_workspace(wpa3_supplicant_workspace_t *wksp)
@@ -1380,6 +1395,7 @@ cy_rslt_t wpa3_supplicant_deinit_workspace(wpa3_supplicant_workspace_t *wksp)
         /* join thread */
         if ( wksp->wpa3_rtos_info->thread_handle != NULL )
         {
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:SAE thread join %p\n", &(wksp->wpa3_rtos_info->thread_handle)));
             (void)cy_rtos_join_thread( &(wksp->wpa3_rtos_info->thread_handle) );
         }
         WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:SAE thread join done\n"));
@@ -1531,9 +1547,6 @@ void wpa3_sae_cleanup_workspace(void)
 
 void wpa3_auth_join_callback (cy_wcm_event_t event, cy_wcm_event_data_t *event_data)
 {
-    wpa3_supplicant_workspace_t* wksp = NULL;
-
-    wksp = wpa3_sae_get_workspace();
     switch(event)
     {
         case CY_WCM_EVENT_CONNECTING:
@@ -1541,17 +1554,9 @@ void wpa3_auth_join_callback (cy_wcm_event_t event, cy_wcm_event_data_t *event_d
             break;
         case CY_WCM_EVENT_CONNECTED:
             WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:CY_WCM_EVENT_CONNECTED\n"));
-            if ( wksp != NULL )
-            {
-                wpa3_sae_cleanup_workspace();
-            }
             break;
         case CY_WCM_EVENT_CONNECT_FAILED:
             WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:CY_WCM_EVENT_CONNECT_FAILED\n"));
-            if (wksp != NULL )
-            {
-                wpa3_sae_cleanup_workspace();
-            }
             break;
         case CY_WCM_EVENT_RECONNECTED:
             WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:CY_WCM_EVENT_RECONNECTED\n"));
@@ -1597,22 +1602,29 @@ void wpa3_sae_timer_expiry(cy_timer_callback_arg_t arg)
 
     cy_rtos_stop_timer(&(wksp->wpa3_sae_timer));
 
+    WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:wpa3_sae_timer_expiry handshake fail %d, success %d\n",
+            wksp->wpa3_sae_rx_handshake_fail, wksp->wpa3_sae_handshake_success));
+
     if (( wksp->wpa3_sae_rx_handshake_fail == true ) || ( wksp->wpa3_sae_handshake_success == true ))
     {
         /* delete all context info */
-        WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:wpa3_sae_timer_expiry handshake failed/success \n"));
         wksp->wpa3_sae_rx_handshake_fail = false;
-        if ( wpa3_sae_supplicant_deinit_done == false)
-        {
-            wpa3_supplicant_deinit_workspace(wksp);
-        }
     }
     else if ( ( wksp->wpa3_sae_sync >= WPA3_SAE_MAX_RETRANS_ATTEMTPS) &&
             ( wpa3_sae_supplicant_deinit_done == false ))
     {
        /* delete all context info */
         WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:wpa3_sae_timer_expiry exhausted max retries \n"));
-        wpa3_sae_cleanup_workspace();
+        if ( wpa3_sae_workspace_cleanup_initiated == false)
+        {
+            wpa3_sae_workspace_cleanup_initiated = true;
+            msg.length = 0;
+            msg.data = NULL;
+            msg.event_type = WPA3_SUPPLICANT_EVENT_DELETE;
+            wpa3_supplicant_send_event(wksp, &msg);
+
+            WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:WPA3_SUPPLICANT_EVENT_DELETE posted \n"));
+        }
     }
     else if ( wpa3_sae_supplicant_deinit_done == false)
     {
@@ -1683,4 +1695,42 @@ static void wpa3_sae_scan_callback(whd_scan_result_t **result_ptr, void *user_da
             wpa3_sae_scan_in_progress = false;
        }
     }
+}
+
+cy_rslt_t wpa3_sta_mac_ap_bssid_buf(uint8_t *sta_mac, uint8_t *ap_bssid, uint8_t *output)
+{
+    int32_t i = 0;
+    bool sta_gr = false;
+    uint8_t null_bssid[ETH_ADDR_LEN] = { 0 };
+
+    if ((memcmp(sta_mac, null_bssid, ETH_ADDR_LEN) == 0)
+            || (memcmp(ap_bssid, null_bssid, ETH_ADDR_LEN) == 0))
+    {
+        WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:wpa3_sta_mac_ap_bssid_buf failed\n"));
+        return WPA3_EXT_CRYPTO_ERROR;
+    }
+
+    for (i = 0; i < ETH_ADDR_LEN; i++)
+    {
+        if (sta_mac[i] > ap_bssid[i])
+        {
+            sta_gr = true;
+            break;
+        }
+        else if (sta_mac[i] < ap_bssid[i])
+        {
+            break;
+        }
+    }
+    if (sta_gr == true)
+    {
+        memcpy(output, sta_mac, ETH_ADDR_LEN);
+        memcpy(&output[ETH_ADDR_LEN], ap_bssid, ETH_ADDR_LEN);
+    }
+    else
+    {
+        memcpy(output, ap_bssid, ETH_ADDR_LEN);
+        memcpy(&output[ETH_ADDR_LEN], sta_mac, ETH_ADDR_LEN);
+    }
+    return CY_RSLT_SUCCESS;
 }
