@@ -1,34 +1,31 @@
 /*
- * Copyright 2025, Cypress Semiconductor Corporation (an Infineon company) or
- * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
+ * (c) 2025, Infineon Technologies AG, or an affiliate of Infineon
+ * Technologies AG. All rights reserved.
+ * This software, associated documentation and materials ("Software") is
+ * owned by Infineon Technologies AG or one of its affiliates ("Infineon")
+ * and is protected by and subject to worldwide patent protection, worldwide
+ * copyright laws, and international treaty provisions. Therefore, you may use
+ * this Software only as provided in the license agreement accompanying the
+ * software package from which you obtained this Software. If no license
+ * agreement applies, then any use, reproduction, modification, translation, or
+ * compilation of this Software is prohibited without the express written
+ * permission of Infineon.
  *
- * This software, including source code, documentation and related
- * materials ("Software") is owned by Cypress Semiconductor Corporation
- * or one of its affiliates ("Cypress") and is protected by and subject to
- * worldwide patent protection (United States and foreign),
- * United States copyright laws and international treaty provisions.
- * Therefore, you may use this Software only as provided in the license
- * agreement accompanying the software package from which you
- * obtained this Software ("EULA").
- * If no EULA applies, Cypress hereby grants you a personal, non-exclusive,
- * non-transferable license to copy, modify, and compile the Software
- * source code solely for use in connection with Cypress's
- * integrated circuit products.  Any reproduction, modification, translation,
- * compilation, or representation of this Software except as specified
- * above is prohibited without the express written permission of Cypress.
- *
- * Disclaimer: THIS SOFTWARE IS PROVIDED AS-IS, WITH NO WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, NONINFRINGEMENT, IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. Cypress
- * reserves the right to make changes to the Software without notice. Cypress
- * does not assume any liability arising out of the application or use of the
- * Software or any product or circuit described in the Software. Cypress does
- * not authorize its products for use in any products where a malfunction or
- * failure of the Cypress product may reasonably be expected to result in
- * significant property damage, injury or death ("High Risk Product"). By
- * including Cypress's product in a High Risk Product, the manufacturer
- * of such system or application assumes all risk of such use and in doing
- * so agrees to indemnify Cypress against all liability.
+ * Disclaimer: UNLESS OTHERWISE EXPRESSLY AGREED WITH INFINEON, THIS SOFTWARE
+ * IS PROVIDED AS-IS, WITH NO WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+ * INCLUDING, BUT NOT LIMITED TO, ALL WARRANTIES OF NON-INFRINGEMENT OF
+ * THIRD-PARTY RIGHTS AND IMPLIED WARRANTIES SUCH AS WARRANTIES OF FITNESS FOR A
+ * SPECIFIC USE/PURPOSE OR MERCHANTABILITY.
+ * Infineon reserves the right to make changes to the Software without notice.
+ * You are responsible for properly designing, programming, and testing the
+ * functionality and safety of your intended application of the Software, as
+ * well as complying with any legal requirements related to its use. Infineon
+ * does not guarantee that the Software will be free from intrusion, data theft
+ * or loss, or other breaches ("Security Breaches"), and Infineon shall have
+ * no liability arising out of any Security Breaches. Unless otherwise
+ * explicitly approved by Infineon, the Software may not be used in any
+ * application where a failure of the Product or any consequences of the use
+ * thereof can reasonably be expected to result in personal injury.
  */
 
 #include "wpa3_ext_supp.h"
@@ -96,12 +93,13 @@ static cy_rslt_t wpa3_crypto_hmac_sha256(uint8_t *key, size_t key_len, size_t nu
 
     md_info = (mbedtls_md_info_t *) mbedtls_md_info_from_type(md_type);
     if (!md_info) {
-        return WPA3_EXT_CRYPTO_ERROR;
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     ret = mbedtls_md_setup(&md_ctx, md_info, 1);
     if (ret != CY_RSLT_SUCCESS) {
-        return ret;
+        goto cleanup;
     }
 
     mbedtls_md_hmac_starts(&md_ctx, key, key_len);
@@ -112,6 +110,7 @@ static cy_rslt_t wpa3_crypto_hmac_sha256(uint8_t *key, size_t key_len, size_t nu
 
     mbedtls_md_hmac_finish(&md_ctx, mac);
 
+cleanup:
     mbedtls_md_free(&md_ctx);
 
     return ret;
@@ -331,8 +330,12 @@ static cy_rslt_t wpa3_crypto_get_rand(mbedtls_ecp_group *ecp_grp, mbedtls_mpi *r
     if (cmp_val != 1) {
         return WPA3_EXT_CRYPTO_ERROR;
     }
+    return ret;
 
-    cleanup:
+cleanup:
+    mbedtls_mpi_free(&tmp);
+    mbedtls_ctr_drbg_free(&ctr_drbg);
+    mbedtls_entropy_free(&entropy);
 
     return ret;
 }
@@ -357,7 +360,7 @@ static cy_rslt_t wpa3_crypto_read_point_from_buffer(wpa3_supplicant_workspace_t 
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:wpa3_crypto_read_point_from_buffer failed ret=%ld\n", ret));
     }
-    return CY_RSLT_SUCCESS;
+    return ret;
 }
 
 static cy_rslt_t wpa3_crypto_write_point_to_buffer(wpa3_supplicant_workspace_t *wksp,
@@ -396,7 +399,8 @@ static bool wpa3_cyrpto_is_quadratic_residue_blind(uint8_t *qr_buf, uint8_t *qnr
     if (ret != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:wpa3_cyrpto_is_quadratic_residue_blind get_rand failed!!\n"));
-        return false;
+        ret = false;
+        goto cleanup;
     }
 
     /* r_tmp = r */
@@ -432,7 +436,8 @@ static bool wpa3_cyrpto_is_quadratic_residue_blind(uint8_t *qr_buf, uint8_t *qnr
                 mbedtls_mpi_exp_mod(&num, &num, &unity, &ecp_grp->P, NULL));
 
         if (wpa3_crypto_mpi_legendre(&num, &ecp_grp->P) == 1) {
-            return true;
+            ret = true;
+            goto cleanup;
         }
     } else {
         /*  num = num * qnr  */
@@ -443,7 +448,8 @@ static bool wpa3_cyrpto_is_quadratic_residue_blind(uint8_t *qr_buf, uint8_t *qnr
                 mbedtls_mpi_exp_mod(&num, &num, &unity, &ecp_grp->P, NULL));
 
         if (wpa3_crypto_mpi_legendre(&num, &ecp_grp->P) == -1) {
-            return true;
+            ret = true;
+            goto cleanup;
         }
     }
 
@@ -944,7 +950,7 @@ cy_rslt_t wpa3_crypto_start_pwe_generation(wpa3_supplicant_workspace_t *wksp) {
     if (res != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:wpa3_crypto_get_rand_qr_qnr failed ret = %ld\n", res));
-        return res;
+        goto cleanup;
     }
 
     res = wpa3_crypto_get_rand(&(wksp->wpa3_crypto_ctxt->group), &randpass,
@@ -952,7 +958,7 @@ cy_rslt_t wpa3_crypto_start_pwe_generation(wpa3_supplicant_workspace_t *wksp) {
     if (res != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:wpa3_crypto_get_rand failed ret = %ld\n", res));
-        return res;
+        goto cleanup;
     }
 
     MBEDTLS_MPI_CHK(
@@ -964,7 +970,7 @@ cy_rslt_t wpa3_crypto_start_pwe_generation(wpa3_supplicant_workspace_t *wksp) {
     if (res != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:wpa3_sta_mac_ap_bssid_buf failed ret = %ld\n", res));
-        return res;
+        goto cleanup;
     }
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:mac_buf\n"));
     WPA3_EXT_HEX_BUF_DUMP((mac_buf, sizeof(mac_buf)));
@@ -1281,7 +1287,7 @@ cy_rslt_t wpa3_crypto_derive_pwe_from_pt(wpa3_supplicant_workspace_t *wksp)
     if (ret != CY_RSLT_SUCCESS)
     {
         WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:wpa3_sta_mac_ap_bssid_buf failed ret = %ld\n", ret));
-        return ret;
+        goto cleanup;
     }
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:mac_buf\n"));
     WPA3_EXT_HEX_BUF_DUMP((mac_buf, sizeof(mac_buf)));
@@ -1291,7 +1297,8 @@ cy_rslt_t wpa3_crypto_derive_pwe_from_pt(wpa3_supplicant_workspace_t *wksp)
     if (!md_info)
     {
         WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:md_info failed \n"));
-        return WPA3_EXT_CRYPTO_ERROR;
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     ret = mbedtls_hkdf_extract((const mbedtls_md_info_t *) md_info,
@@ -1302,7 +1309,8 @@ cy_rslt_t wpa3_crypto_derive_pwe_from_pt(wpa3_supplicant_workspace_t *wksp)
      if (ret != CY_RSLT_SUCCESS)
      {
          WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:mbedtls_hkdf_extract failed ret=%ld \n", ret));
-         return WPA3_EXT_CRYPTO_ERROR;
+         ret = WPA3_EXT_CRYPTO_ERROR;
+         goto cleanup;
      }
      WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:  pwd_seed\n"));
      WPA3_EXT_HEX_BUF_DUMP((pwd_seed, sizeof(pwd_seed)));
@@ -1321,7 +1329,8 @@ cy_rslt_t wpa3_crypto_derive_pwe_from_pt(wpa3_supplicant_workspace_t *wksp)
      if (ret != CY_RSLT_SUCCESS)
      {
          WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:mbedtls_mpi_mod_mpi pwdval failed ret=%ld \n", ret));
-         return WPA3_EXT_CRYPTO_ERROR;
+         ret = WPA3_EXT_CRYPTO_ERROR;
+         goto cleanup;
      }
 
      /* pwdval = pwdval + 1 */
@@ -1407,7 +1416,8 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     md_info = (mbedtls_md_info_t *) mbedtls_md_info_from_type(md_type);
     if (!md_info) {
         WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:md_info failed \n"));
-        return WPA3_EXT_CRYPTO_ERROR;
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     /* pwd-seed = HKDF-Extract(ssid, password [|| identifier]) */
@@ -1420,7 +1430,8 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     if (ret != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:mbedtls_hkdf_extract failed ret=%d \n", ret));
-        return WPA3_EXT_CRYPTO_ERROR;
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:  pwd_seed\n"));
@@ -1437,7 +1448,8 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     if (ret != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:mbedtls_hkdf_expand u1p1 failed ret=%d \n", ret));
-        return WPA3_EXT_CRYPTO_ERROR;
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     /* Perform a modular reduction. R = pwd-value mod p*/
@@ -1452,7 +1464,8 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     if (ret != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:mbedtls_mpi_mod_mpi u1 failed ret=%d \n", ret));
-        return WPA3_EXT_CRYPTO_ERROR;
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:  pwd_value\n"));
@@ -1469,7 +1482,8 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     if (ret != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:wpa3_cyrpto_sswu_algo pt1 failed ret=%d \n", ret));
-        return WPA3_EXT_CRYPTO_ERROR;
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
     wpa3_crypto_read_point_from_buffer(wksp, xp1, yp1, &P1);
 
@@ -1504,7 +1518,8 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     if (ret != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:mbedtls_hkdf_expand u2p2 failed ret=%d \n", ret));
-        return WPA3_EXT_CRYPTO_ERROR;
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     /* u2 = pwd-value modulo p */
@@ -1518,7 +1533,8 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     if (ret != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:mbedtls_mpi_mod_mpi u2 failed ret=%d \n", ret));
-        return WPA3_EXT_CRYPTO_ERROR;
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP: u2 pwdval point\n"));
@@ -1531,7 +1547,8 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     if (ret != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:wpa3_cyrpto_sswu_algo pt2 failed ret=%d \n", ret));
-        return WPA3_EXT_CRYPTO_ERROR;
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:xp2 dump\n"));
@@ -1574,7 +1591,7 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     WPA3_EXT_HEX_BUF_DUMP((output, outlen));
 
     if (ret != CY_RSLT_SUCCESS) {
-        return WPA3_EXT_CRYPTO_ERROR;
+        ret = WPA3_EXT_CRYPTO_ERROR;
     }
 
     cleanup:
@@ -1585,7 +1602,8 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     mbedtls_ecp_point_free(&PT);
     mbedtls_mpi_free(&m);
     mbedtls_mpi_free(&pwdval);
-    return CY_RSLT_SUCCESS;
+    mbedtls_md_free(&md_ctx);
+    return ret;
 }
 
 cy_rslt_t wpa3_crypto_check_valid_point_on_ecp_curve(
@@ -1658,8 +1676,19 @@ cy_rslt_t wpa3_crypto_init(wpa3_supplicant_workspace_t *wksp) {
     /* Initialize ECP group */
     MBEDTLS_MPI_CHK(
             mbedtls_ecp_group_load(&(wksp->wpa3_crypto_ctxt->group), grp_id));
+    return CY_RSLT_SUCCESS;
 
-    cleanup:
+cleanup:
+    mbedtls_ecp_point_free(&wksp->wpa3_crypto_ctxt->sta_commit_element);
+    mbedtls_ecp_point_free(&wksp->wpa3_crypto_ctxt->sta_pt_element);
+    mbedtls_mpi_free(&wksp->wpa3_crypto_ctxt->sta_scalar);
+    mbedtls_mpi_free(&wksp->wpa3_crypto_ctxt->sta_private);
+    mbedtls_ecp_point_free(&wksp->wpa3_crypto_ctxt->pwe);
+    mbedtls_mpi_free(&wksp->wpa3_crypto_ctxt->sta_sae_rand);
+    mbedtls_ctr_drbg_free(&wksp->wpa3_crypto_ctxt->ctr_drbg);
+    mbedtls_entropy_free(&wksp->wpa3_crypto_ctxt->entropy);
+    free(wksp->wpa3_crypto_ctxt);
+
     return ret;
 }
 
@@ -1677,6 +1706,7 @@ cy_rslt_t wpa3_crypto_deinit(wpa3_supplicant_workspace_t *wksp) {
     mbedtls_mpi_free(&wksp->wpa3_crypto_ctxt->sta_sae_rand);
     mbedtls_ctr_drbg_free(&wksp->wpa3_crypto_ctxt->ctr_drbg);
     mbedtls_entropy_free(&wksp->wpa3_crypto_ctxt->entropy);
+    mbedtls_ecp_group_free(&wksp->wpa3_crypto_ctxt->group);
     memset(wksp->wpa3_crypto_ctxt, 0, sizeof(wpa3_crypto_context_info_t));
 
     if (wksp->wpa3_crypto_ctxt != NULL) {
@@ -1972,7 +2002,8 @@ cy_rslt_t wpa3_crypto_compute_shared_secret(
     if (ret == 1) {
         /* point is at infinity */
         WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:computed K is at infinity \n"));
-        return WPA3_EXT_CRYPTO_ERROR;
+        result = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     /* copy the ecp_point to buffer */

@@ -5,6 +5,9 @@ See the [README.md](./README.md) for a complete description of the WPA3 External
 
 ## Changelog
 
+### v1.3.1
+* Minor bug fixes
+
 ### v1.3.0
 * Added support for PSOC&trade; Edge E84 (PSE84) platform.
 * Enabled LLVM_ARM toolchain support for PSE84 platform.
