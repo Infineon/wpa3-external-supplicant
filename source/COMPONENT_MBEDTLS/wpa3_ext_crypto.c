@@ -1,5 +1,5 @@
 /*
- * (c) 2025, Infineon Technologies AG, or an affiliate of Infineon
+ * (c) 2026, Infineon Technologies AG, or an affiliate of Infineon
  * Technologies AG. All rights reserved.
  * This software, associated documentation and materials ("Software") is
  * owned by Infineon Technologies AG or one of its affiliates ("Infineon")
@@ -29,20 +29,71 @@
  */
 
 #include "wpa3_ext_supp.h"
+#include <mbedtls/version.h>
+#if !defined(MBEDTLS_VERSION_MAJOR)
+#error "MBEDTLS_VERSION_MAJOR undefined - mbedtls/version.h not included"
+#endif
 #include <mbedtls/ssl.h>
+#if MBEDTLS_VERSION_MAJOR >= 4
+#include <mbedtls/threading.h>
+#include "psa/crypto.h"
+#else
+#include "entropy_poll.h"
+#endif
+
 /*
  * Misra coverity test doesn't pull dependency libraries so added below code under WPA3_EXT_NO_HARDWARE not defined.
  * Misra coverity test code defines WPA3_EXT_NO_HARDWARE and definition for wpa3_crypto_random_number_generate()
  * is added to stubs file.
  */
 #ifndef WPA3_EXT_NO_HARDWARE
+
+/* WPA3 external supplicant SAE handshake uses entropy function which internally locks mutex. Hence adding
+ * mbedtls mutex threading ALT functions
+ */
+#if defined(MBEDTLS_THREADING_ALT)
+#if MBEDTLS_VERSION_MAJOR >= 4
+/* WPA3 external supplicant SAE handshake uses entropy function which internally locks mutex. Hence adding
+ * mbedtls mutex threading ALT functions
+ */
+__WEAK int cy_mbedtls_mutex_init(mbedtls_platform_mutex_t *mutex)
+{
+    if (mutex == NULL || CY_RSLT_SUCCESS != cy_rtos_init_mutex(&mutex->tls_buf_mutex)) {
+        return -1;
+    }
+    return 0;
+}
+
+__WEAK void cy_mbedtls_mutex_free(mbedtls_platform_mutex_t *mutex)
+{
+    if (mutex != NULL) {
+        cy_rtos_deinit_mutex(&mutex->tls_buf_mutex);
+    }
+}
+
+__WEAK int cy_mbedtls_mutex_lock(mbedtls_platform_mutex_t *mutex)
+{
+    if (mutex == NULL || CY_RSLT_SUCCESS != cy_rtos_get_mutex(&mutex->tls_buf_mutex,
+                                                               CY_RTOS_NEVER_TIMEOUT)) {
+        return -1;
+    }
+    return 0;
+}
+
+__WEAK int cy_mbedtls_mutex_unlock(mbedtls_platform_mutex_t *mutex)
+{
+    if (mutex == NULL || CY_RSLT_SUCCESS != cy_rtos_set_mutex(&mutex->tls_buf_mutex)) {
+        return -1;
+    }
+    return 0;
+}
+#else
+
 extern int mbedtls_hardware_poll( void *data, unsigned char *output, size_t len, size_t *olen );
 
 /* WPA3 external supplicant SAE handshake uses entropy function which internally locks mutex. Hence adding
  * mbedtls mutex threading ALT functions
  */
-
-#if defined(MBEDTLS_THREADING_ALT)
 __WEAK void cy_mbedtls_mutex_init(mbedtls_threading_mutex_t *mutex)
 {
     cy_rtos_init_mutex(&mutex->tls_buf_mutex);
@@ -66,7 +117,8 @@ __WEAK int cy_mbedtls_mutex_unlock(mbedtls_threading_mutex_t *mutex)
 
     return CY_RSLT_SUCCESS;
 }
-#endif
+#endif /* MBEDTLS_VERSION_MAJOR >= 4 */
+#endif /* MBEDTLS_THREADING_ALT */
 
 /*
  * This function generates random number and is passed as parameter to mbedtls_ecp_mul().
@@ -74,9 +126,37 @@ __WEAK int cy_mbedtls_mutex_unlock(mbedtls_threading_mutex_t *mutex)
  */
 static int wpa3_crypto_random_number_generate(void *data, unsigned char *output, size_t len)
 {
+#if MBEDTLS_VERSION_MAJOR >= 4
+    /* Mbed TLS 4.0 / PSA Crypto 1.0 replaced the mbedtls_hardware_poll() entropy
+     * callback with mbedtls_platform_get_entropy(), which is private to the PSA
+     * core. psa_generate_random() is the public replacement. */
+    (void) data;
+    return (psa_generate_random(output, len) == PSA_SUCCESS) ? 0 : WPA3_EXT_CRYPTO_ERROR;
+#else
     size_t olen;
     return mbedtls_hardware_poll(data, output, len, &olen);
+#endif
 }
+#endif
+
+/*
+ * RNG callback used when generating random ECC scalars.
+ *
+ * In Mbed TLS 4.0 / PSA Crypto 1.0, mbedtls_ctr_drbg_context embeds a
+ * psa_cipher_operation_t and mbedtls_ctr_drbg_free() copies that struct by value.
+ * Seeding a throw-away DRBG on the stack for every random scalar therefore
+ * overflows the SAE supplicant thread stack. The PSA RNG is already seeded from
+ * the platform entropy source, so draw from it directly and keep the DRBG off
+ * the stack.
+ *
+ * Pre-4.0 builds keep the original entropy + CTR_DRBG behaviour.
+ */
+#if MBEDTLS_VERSION_MAJOR >= 4
+#define WPA3_RNG_FN     wpa3_crypto_random_number_generate
+#define WPA3_RNG_CTX    NULL
+#else
+#define WPA3_RNG_FN     mbedtls_ctr_drbg_random
+#define WPA3_RNG_CTX    (&ctr_drbg)
 #endif
 
 extern cy_rslt_t cy_wpa3_get_pfn_network( uint8_t * ssid, uint8_t *passphrase, uint8_t *pt );
@@ -97,10 +177,19 @@ static cy_rslt_t wpa3_crypto_hmac_sha256(uint8_t *key, size_t key_len, size_t nu
         goto cleanup;
     }
 
+#if MBEDTLS_VERSION_MAJOR < 4
     ret = mbedtls_md_setup(&md_ctx, md_info, 1);
+#else
+    ret = mbedtls_md_setup(&md_ctx, md_info, 0);
     if (ret != CY_RSLT_SUCCESS) {
         goto cleanup;
     }
+
+    ret = mbedtls_md_hmac_setup(&md_ctx, md_info);
+    if (ret != CY_RSLT_SUCCESS) {
+        goto cleanup;
+    }
+#endif
 
     mbedtls_md_hmac_starts(&md_ctx, key, key_len);
 
@@ -218,11 +307,14 @@ static cy_rslt_t wpa3_crypto_get_rand_qr_qnr(mbedtls_ecp_group* ecp_grp, uint8_t
     int ret;
     bool qnr_found = false;
     bool qr_found = false;
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ctr_drbg_context ctr_drbg;
     mbedtls_entropy_context entropy;
+#endif
 
     while ((qnr_found == false) || (qr_found == false)) {
         mbedtls_mpi_init(&tmp);
+#if MBEDTLS_VERSION_MAJOR < 4
         mbedtls_ctr_drbg_init(&ctr_drbg);
         mbedtls_entropy_init(&entropy);
 
@@ -236,10 +328,11 @@ static cy_rslt_t wpa3_crypto_get_rand_qr_qnr(mbedtls_ecp_group* ecp_grp, uint8_t
         }
         mbedtls_ctr_drbg_set_prediction_resistance(&ctr_drbg,
                 MBEDTLS_CTR_DRBG_PR_OFF);
+#endif
 
         MBEDTLS_MPI_CHK(
-                mbedtls_ecp_gen_privkey(ecp_grp, &tmp, mbedtls_ctr_drbg_random,
-                        &ctr_drbg));
+                mbedtls_ecp_gen_privkey(ecp_grp, &tmp, WPA3_RNG_FN,
+                        WPA3_RNG_CTX));
         ret = wpa3_crypto_mpi_legendre(&tmp, &ecp_grp->P);
 
         if ((ret == 1) && (qr_found == false)) {
@@ -258,13 +351,17 @@ static cy_rslt_t wpa3_crypto_get_rand_qr_qnr(mbedtls_ecp_group* ecp_grp, uint8_t
             break;
         }
         mbedtls_mpi_free(&tmp);
+#if MBEDTLS_VERSION_MAJOR < 4
         mbedtls_ctr_drbg_free(&ctr_drbg);
         mbedtls_entropy_free(&entropy);
+#endif
     }
 
     cleanup: mbedtls_mpi_free(&tmp);
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ctr_drbg_free(&ctr_drbg);
     mbedtls_entropy_free(&entropy);
+#endif
 
     return CY_RSLT_SUCCESS;
 }
@@ -272,13 +369,16 @@ static cy_rslt_t wpa3_crypto_get_rand_qr_qnr(mbedtls_ecp_group* ecp_grp, uint8_t
 static cy_rslt_t wpa3_crypto_get_rand(mbedtls_ecp_group *ecp_grp, mbedtls_mpi *r,
         bool order) {
     mbedtls_mpi tmp;
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ctr_drbg_context ctr_drbg;
     mbedtls_entropy_context entropy;
+#endif
     int cmp_val = 0, ret = 0, rand_tries = 5;
     unsigned char buf[WPA3_SAE_KEYSEED_KEY_LEN] = { 0 };
 
     do {
         mbedtls_mpi_init(&tmp);
+#if MBEDTLS_VERSION_MAJOR < 4
         mbedtls_ctr_drbg_init(&ctr_drbg);
         mbedtls_entropy_init(&entropy);
 
@@ -292,10 +392,11 @@ static cy_rslt_t wpa3_crypto_get_rand(mbedtls_ecp_group *ecp_grp, mbedtls_mpi *r
         }
         mbedtls_ctr_drbg_set_prediction_resistance(&ctr_drbg,
                 MBEDTLS_CTR_DRBG_PR_OFF);
+#endif
 
         MBEDTLS_MPI_CHK(
-                mbedtls_ecp_gen_privkey(ecp_grp, &tmp, mbedtls_ctr_drbg_random,
-                        &ctr_drbg));
+                mbedtls_ecp_gen_privkey(ecp_grp, &tmp, WPA3_RNG_FN,
+                        WPA3_RNG_CTX));
 
         MBEDTLS_MPI_CHK(
                 mbedtls_mpi_write_binary(&tmp, (unsigned char * )buf,
@@ -322,8 +423,10 @@ static cy_rslt_t wpa3_crypto_get_rand(mbedtls_ecp_group *ecp_grp, mbedtls_mpi *r
         rand_tries--;
 
         mbedtls_mpi_free(&tmp);
+#if MBEDTLS_VERSION_MAJOR < 4
         mbedtls_ctr_drbg_free(&ctr_drbg);
         mbedtls_entropy_free(&entropy);
+#endif
 
     } while ((cmp_val != 1) && (rand_tries > 0));
 
@@ -334,8 +437,10 @@ static cy_rslt_t wpa3_crypto_get_rand(mbedtls_ecp_group *ecp_grp, mbedtls_mpi *r
 
 cleanup:
     mbedtls_mpi_free(&tmp);
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ctr_drbg_free(&ctr_drbg);
     mbedtls_entropy_free(&entropy);
+#endif
 
     return ret;
 }
@@ -477,6 +582,128 @@ static int wpa3_crypto_point_inverse(const mbedtls_ecp_group *grp,
         MBEDTLS_MPI_CHK(mbedtls_mpi_sub_mpi(&R->MBEDTLS_PRIVATE(Y), &grp->P, &R->MBEDTLS_PRIVATE(Y)));
     }
     cleanup: return (ret);
+}
+
+/*
+ * R = P + Q on a short Weierstrass curve, in affine coordinates.
+ *
+ * Mbed TLS 4.0 / PSA Crypto 1.0 expose no curve arithmetic through PSA (see
+ * TF-PSA-Crypto docs/psa-transition.md, "No curve arithmetic"), and the
+ * HW-accelerated legacy implementation of mbedtls_ecp_muladd() in
+ * cy-mbedtls-acceleration/mbedtls_MXCRYPTO/ecp_alt_mxcrypto.c relies on the
+ * _ALT mechanism, which 4.0 dropped. Both SAE call sites only ever evaluate
+ * 1*P + 1*Q, so plain point addition is implemented here on top of the MPI
+ * layer, which is still available.
+ *
+ * Curve equation y^2 = x^3 + a.x + b (mod grp->P):
+ *   P == O                        -> R = Q
+ *   Q == O                        -> R = P
+ *   Px == Qx and Py + Qy == 0     -> R = O          (Q is the inverse of P)
+ *   P == Q                        -> lambda = (3.Px^2 + a) / (2.Py)  [doubling]
+ *   otherwise                     -> lambda = (Qy - Py) / (Qx - Px)  [chord]
+ * then Rx = lambda^2 - Px - Qx and Ry = lambda.(Px - Rx) - Py.
+ *
+ * Inputs must satisfy the mbedtls_ecp_point contract (Z == 0 for the point at
+ * infinity, otherwise affine coordinates with Z == 1); the result is returned
+ * in that same normalised form.
+ *
+ * R may alias P and/or Q: every intermediate is held in a local temporary and R
+ * is written only once the result is final.
+ *
+ * Like mbedtls_ecp_muladd(), this routine is NOT constant time.
+ */
+static int wpa3_crypto_point_add(const mbedtls_ecp_group *grp,
+        mbedtls_ecp_point *R, const mbedtls_ecp_point *P,
+        const mbedtls_ecp_point *Q) {
+    int ret = 0;
+    mbedtls_mpi lambda;
+    mbedtls_mpi num;
+    mbedtls_mpi den;
+    mbedtls_mpi xr;
+    mbedtls_mpi yr;
+
+    /* A neutral operand makes the result the other operand. */
+    if (mbedtls_mpi_cmp_int(&P->MBEDTLS_PRIVATE(Z), 0) == 0) {
+        return mbedtls_ecp_copy(R, Q);
+    }
+    if (mbedtls_mpi_cmp_int(&Q->MBEDTLS_PRIVATE(Z), 0) == 0) {
+        return mbedtls_ecp_copy(R, P);
+    }
+
+    mbedtls_mpi_init(&lambda);
+    mbedtls_mpi_init(&num);
+    mbedtls_mpi_init(&den);
+    mbedtls_mpi_init(&xr);
+    mbedtls_mpi_init(&yr);
+
+    if (mbedtls_mpi_cmp_mpi(&P->MBEDTLS_PRIVATE(X), &Q->MBEDTLS_PRIVATE(X)) == 0) {
+        /* Px == Qx, so Qy is either Py or -Py. num = (Py + Qy) mod p is zero in
+         * the latter case, which means Q == -P and P + Q is the point at
+         * infinity; otherwise Q == P and this is a doubling. */
+        MBEDTLS_MPI_CHK(mbedtls_mpi_add_mpi(&num, &P->MBEDTLS_PRIVATE(Y), &Q->MBEDTLS_PRIVATE(Y)));
+        MBEDTLS_MPI_CHK(mbedtls_mpi_mod_mpi(&num, &num, &grp->P));
+
+        if (mbedtls_mpi_cmp_int(&num, 0) == 0) {
+            /* Point at infinity, same encoding as mbedtls_ecp_set_zero(). */
+            MBEDTLS_MPI_CHK(mbedtls_mpi_lset(&R->MBEDTLS_PRIVATE(X), 1));
+            MBEDTLS_MPI_CHK(mbedtls_mpi_lset(&R->MBEDTLS_PRIVATE(Y), 1));
+            MBEDTLS_MPI_CHK(mbedtls_mpi_lset(&R->MBEDTLS_PRIVATE(Z), 0));
+            goto cleanup;
+        }
+
+        /* num = (3.Px^2 + a) mod p */
+        MBEDTLS_MPI_CHK(mbedtls_mpi_mul_mpi(&num, &P->MBEDTLS_PRIVATE(X), &P->MBEDTLS_PRIVATE(X)));
+        MBEDTLS_MPI_CHK(mbedtls_mpi_mod_mpi(&num, &num, &grp->P));
+        MBEDTLS_MPI_CHK(mbedtls_mpi_mul_int(&num, &num, 3));
+        if (grp->A.MBEDTLS_PRIVATE(p) == NULL) {
+            /* Mbed TLS leaves A unset to flag the a == -3 curves (SECP*R1);
+             * this is the same test as mbedtls_ecp_group_a_is_minus_3(). */
+            MBEDTLS_MPI_CHK(mbedtls_mpi_sub_int(&num, &num, 3));
+        } else {
+            MBEDTLS_MPI_CHK(mbedtls_mpi_add_mpi(&num, &num, &grp->A));
+        }
+        MBEDTLS_MPI_CHK(mbedtls_mpi_mod_mpi(&num, &num, &grp->P));
+
+        /* den = (2.Py) mod p, non-zero because Py + Qy != 0 above */
+        MBEDTLS_MPI_CHK(mbedtls_mpi_mul_int(&den, &P->MBEDTLS_PRIVATE(Y), 2));
+        MBEDTLS_MPI_CHK(mbedtls_mpi_mod_mpi(&den, &den, &grp->P));
+    } else {
+        /* num = (Qy - Py) mod p, den = (Qx - Px) mod p */
+        MBEDTLS_MPI_CHK(mbedtls_mpi_sub_mpi(&num, &Q->MBEDTLS_PRIVATE(Y), &P->MBEDTLS_PRIVATE(Y)));
+        MBEDTLS_MPI_CHK(mbedtls_mpi_mod_mpi(&num, &num, &grp->P));
+        MBEDTLS_MPI_CHK(mbedtls_mpi_sub_mpi(&den, &Q->MBEDTLS_PRIVATE(X), &P->MBEDTLS_PRIVATE(X)));
+        MBEDTLS_MPI_CHK(mbedtls_mpi_mod_mpi(&den, &den, &grp->P));
+    }
+
+    /* lambda = num / den = num * den^-1 mod p */
+    MBEDTLS_MPI_CHK(mbedtls_mpi_inv_mod(&lambda, &den, &grp->P));
+    MBEDTLS_MPI_CHK(mbedtls_mpi_mul_mpi(&lambda, &lambda, &num));
+    MBEDTLS_MPI_CHK(mbedtls_mpi_mod_mpi(&lambda, &lambda, &grp->P));
+
+    /* xr = (lambda^2 - Px - Qx) mod p */
+    MBEDTLS_MPI_CHK(mbedtls_mpi_mul_mpi(&xr, &lambda, &lambda));
+    MBEDTLS_MPI_CHK(mbedtls_mpi_sub_mpi(&xr, &xr, &P->MBEDTLS_PRIVATE(X)));
+    MBEDTLS_MPI_CHK(mbedtls_mpi_sub_mpi(&xr, &xr, &Q->MBEDTLS_PRIVATE(X)));
+    MBEDTLS_MPI_CHK(mbedtls_mpi_mod_mpi(&xr, &xr, &grp->P));
+
+    /* yr = (lambda.(Px - xr) - Py) mod p */
+    MBEDTLS_MPI_CHK(mbedtls_mpi_sub_mpi(&yr, &P->MBEDTLS_PRIVATE(X), &xr));
+    MBEDTLS_MPI_CHK(mbedtls_mpi_mul_mpi(&yr, &yr, &lambda));
+    MBEDTLS_MPI_CHK(mbedtls_mpi_sub_mpi(&yr, &yr, &P->MBEDTLS_PRIVATE(Y)));
+    MBEDTLS_MPI_CHK(mbedtls_mpi_mod_mpi(&yr, &yr, &grp->P));
+
+    /* Commit to R only now, so R is free to alias P or Q. */
+    MBEDTLS_MPI_CHK(mbedtls_mpi_copy(&R->MBEDTLS_PRIVATE(X), &xr));
+    MBEDTLS_MPI_CHK(mbedtls_mpi_copy(&R->MBEDTLS_PRIVATE(Y), &yr));
+    MBEDTLS_MPI_CHK(mbedtls_mpi_lset(&R->MBEDTLS_PRIVATE(Z), 1));
+
+    cleanup: mbedtls_mpi_free(&lambda);
+    mbedtls_mpi_free(&num);
+    mbedtls_mpi_free(&den);
+    mbedtls_mpi_free(&xr);
+    mbedtls_mpi_free(&yr);
+
+    return (ret);
 }
 
 static cy_rslt_t wpa3_crypto_derive_ysqr_from_x(uint8_t *x, uint16_t x_len,
@@ -905,7 +1132,7 @@ static cy_rslt_t wpa3_cyrpto_sswu_algo(wpa3_supplicant_workspace_t *wksp,
 }
 
 cy_rslt_t wpa3_crypto_start_pwe_generation(wpa3_supplicant_workspace_t *wksp) {
-    int counter = 1;
+    uint8_t counter = 1;
     int found = 0;
     mbedtls_mpi X, y, ysqr, temp, base, seed, save, randpass, one;
     mbedtls_mpi ycomp, pycomp, py, ysqr_saved;
@@ -1175,6 +1402,7 @@ cy_rslt_t wpa3_crypto_start_pwe_generation(wpa3_supplicant_workspace_t *wksp) {
         /* post WPA3_SUPPLICANT_EVENT_DELETE to supplicant */
         /* do cleanup */
         res = WPA3_EXT_PWE_GEN_FAILED;
+        goto cleanup;
     }
 
     /*
@@ -1261,7 +1489,11 @@ cy_rslt_t wpa3_crypto_derive_pwe_from_pt(wpa3_supplicant_workspace_t *wksp)
 
         /* derive PT */
         ret = wpa3_crypto_derive_pt(wksp, wksp->wpa3_sae_auth_info.ssid, wksp->wpa3_sae_auth_info.passhphrase, pt, sizeof(pt));
-
+        if ( ret != CY_RSLT_SUCCESS)
+        {
+            WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:  PT derive failed \n"));
+            goto cleanup;
+        }
         WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:  PT \n"));
         WPA3_EXT_HEX_BUF_DUMP((pt, sizeof(pt)));
 
@@ -1301,6 +1533,7 @@ cy_rslt_t wpa3_crypto_derive_pwe_from_pt(wpa3_supplicant_workspace_t *wksp)
         goto cleanup;
     }
 
+#if !defined(IFX_TF_PSA)
     ret = mbedtls_hkdf_extract((const mbedtls_md_info_t *) md_info,
              (const unsigned char *) NULL, 0,
              (const unsigned char *) mac_buf, (size_t) sizeof(mac_buf),
@@ -1312,6 +1545,49 @@ cy_rslt_t wpa3_crypto_derive_pwe_from_pt(wpa3_supplicant_workspace_t *wksp)
          ret = WPA3_EXT_CRYPTO_ERROR;
          goto cleanup;
      }
+#else
+    /* pwd_seed = HKDF-Extract(salt, IKM=mac_buf). The pre-4.0 call passed a NULL
+     * salt; RFC 5869 defines that as hash-length zeros, which PSA needs spelled
+     * out explicitly. */
+    {
+        psa_key_derivation_operation_t kdf_op = PSA_KEY_DERIVATION_OPERATION_INIT;
+        psa_status_t status;
+        uint8_t zero_salt[WPA3_SAE_KEYSEED_KEY_LEN];
+        memset(zero_salt, 0, sizeof(zero_salt));
+
+        status = psa_key_derivation_setup(&kdf_op, PSA_ALG_HKDF_EXTRACT(PSA_ALG_SHA_256));
+        if (status != PSA_SUCCESS) {
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_extract pwe setup failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        status = psa_key_derivation_input_bytes(&kdf_op, PSA_KEY_DERIVATION_INPUT_SALT,
+                    zero_salt, sizeof(zero_salt));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_extract pwe salt failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        status = psa_key_derivation_input_bytes(&kdf_op, PSA_KEY_DERIVATION_INPUT_SECRET,
+                    (const uint8_t *)mac_buf, sizeof(mac_buf));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_extract pwe secret failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        status = psa_key_derivation_output_bytes(&kdf_op, pwd_seed, sizeof(pwd_seed));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_extract pwe output failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        psa_key_derivation_abort(&kdf_op);
+    }
+#endif
+	
      WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:  pwd_seed\n"));
      WPA3_EXT_HEX_BUF_DUMP((pwd_seed, sizeof(pwd_seed)));
 
@@ -1396,7 +1672,6 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     mbedtls_mpi u1, u2;
     mbedtls_ecp_point P1, P2, PT;
     mbedtls_mpi pwdval;
-    mbedtls_mpi m;
     wpa3_crypto_context_info_t *crypto_ctxt;
 
     mbedtls_mpi_init(&u1);
@@ -1404,14 +1679,10 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     mbedtls_ecp_point_init(&P1);
     mbedtls_ecp_point_init(&P2);
     mbedtls_ecp_point_init(&PT);
-    mbedtls_mpi_init(&m);
     mbedtls_mpi_init(&pwdval);
     mbedtls_md_init(&md_ctx);
 
     crypto_ctxt = (wpa3_crypto_context_info_t *) wksp->wpa3_crypto_ctxt;
-
-    /* set m = 1 */
-    MBEDTLS_MPI_CHK(mbedtls_mpi_lset(&m, 1));
 
     md_info = (mbedtls_md_info_t *) mbedtls_md_info_from_type(md_type);
     if (!md_info) {
@@ -1420,6 +1691,7 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
         goto cleanup;
     }
 
+#if !defined(IFX_TF_PSA)
     /* pwd-seed = HKDF-Extract(ssid, password [|| identifier]) */
     ret = mbedtls_hkdf_extract((const mbedtls_md_info_t *) md_info,
             (const unsigned char *) ssid, (size_t) strlen((const char *) ssid),
@@ -1433,10 +1705,49 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
         ret = WPA3_EXT_CRYPTO_ERROR;
         goto cleanup;
     }
+#else
+    /* pwd_seed = HKDF-Extract(salt=ssid, IKM=passphrase) */
+    {
+        psa_key_derivation_operation_t kdf_op = PSA_KEY_DERIVATION_OPERATION_INIT;
+        psa_status_t status;
+
+        status = psa_key_derivation_setup(&kdf_op, PSA_ALG_HKDF_EXTRACT(PSA_ALG_SHA_256));
+        if (status != PSA_SUCCESS) {
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_extract setup failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        status = psa_key_derivation_input_bytes(&kdf_op, PSA_KEY_DERIVATION_INPUT_SALT,
+                    (const uint8_t *)ssid, strlen((const char *)ssid));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_extract salt failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        status = psa_key_derivation_input_bytes(&kdf_op, PSA_KEY_DERIVATION_INPUT_SECRET,
+                    (const uint8_t *)passphrase, strlen((const char *)passphrase));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_extract secret failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        status = psa_key_derivation_output_bytes(&kdf_op, pwd_seed, sizeof(pwd_seed));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_extract output failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        psa_key_derivation_abort(&kdf_op);
+    }
+#endif
 
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:  pwd_seed\n"));
     WPA3_EXT_HEX_BUF_DUMP((pwd_seed, sizeof(pwd_seed)));
 
+#if !defined(IFX_TF_PSA)
     /* pwd-value = HKDF-Expand(pwd-seed, SAE Hash to Element u1 P1, len) */
 
     ret = mbedtls_hkdf_expand((const mbedtls_md_info_t *) md_info,
@@ -1451,6 +1762,46 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
         ret = WPA3_EXT_CRYPTO_ERROR;
         goto cleanup;
     }
+#else
+    /* pwd_value = HKDF-Expand(PRK=pwd_seed, info="SAE Hash to Element u1 P1") */
+    {
+        psa_key_derivation_operation_t kdf_op = PSA_KEY_DERIVATION_OPERATION_INIT;
+        psa_status_t status;
+        const char *info_str = "SAE Hash to Element u1 P1";
+
+        status = psa_key_derivation_setup(&kdf_op, PSA_ALG_HKDF_EXPAND(PSA_ALG_SHA_256));
+        if (status != PSA_SUCCESS) {
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_expand u1p1 setup failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        status = psa_key_derivation_input_bytes(&kdf_op, PSA_KEY_DERIVATION_INPUT_SECRET,
+                    pwd_seed, sizeof(pwd_seed));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_expand u1p1 secret failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        status = psa_key_derivation_input_bytes(&kdf_op, PSA_KEY_DERIVATION_INPUT_INFO,
+                    (const uint8_t *)info_str, strlen(info_str));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_expand u1p1 info failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        memset(pwd_value, 0, sizeof(pwd_value));
+        status = psa_key_derivation_output_bytes(&kdf_op, pwd_value, sizeof(pwd_value));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_expand u1p1 output failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        psa_key_derivation_abort(&kdf_op);
+    }
+#endif
 
     /* Perform a modular reduction. R = pwd-value mod p*/
     /* u1 = pwd_value modulo p */
@@ -1508,6 +1859,7 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
         WPA3_EXT_LOG_MSG(("\n** WPA3-EXT-SUPP:P1 point VALID on ECP CURVE ret=%d **\n", ret));
     }
 
+#if !defined(IFX_TF_PSA)
     /* pwd-value = HKDF-Expand(pwd-seed, SAE Hash to Element u2 P2, len) */
     ret = mbedtls_hkdf_expand((const mbedtls_md_info_t *) md_info,
             (const unsigned char *) pwd_seed, (size_t) sizeof(pwd_seed),
@@ -1521,6 +1873,46 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
         ret = WPA3_EXT_CRYPTO_ERROR;
         goto cleanup;
     }
+#else
+    /* pwd_value = HKDF-Expand(PRK=pwd_seed, info="SAE Hash to Element u2 P2") */
+    {
+        psa_key_derivation_operation_t kdf_op = PSA_KEY_DERIVATION_OPERATION_INIT;
+        psa_status_t status;
+        const char *info_str = "SAE Hash to Element u2 P2";
+
+        status = psa_key_derivation_setup(&kdf_op, PSA_ALG_HKDF_EXPAND(PSA_ALG_SHA_256));
+        if (status != PSA_SUCCESS) {
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_expand u2p2 setup failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        status = psa_key_derivation_input_bytes(&kdf_op, PSA_KEY_DERIVATION_INPUT_SECRET,
+                    pwd_seed, sizeof(pwd_seed));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_expand u2p2 secret failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        status = psa_key_derivation_input_bytes(&kdf_op, PSA_KEY_DERIVATION_INPUT_INFO,
+                    (const uint8_t *)info_str, strlen(info_str));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_expand u2p2 info failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        memset(pwd_value, 0, sizeof(pwd_value));
+        status = psa_key_derivation_output_bytes(&kdf_op, pwd_value, sizeof(pwd_value));
+        if (status != PSA_SUCCESS) {
+            psa_key_derivation_abort(&kdf_op);
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:psa hkdf_expand u2p2 output failed status=%d\n", (int)status));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
+        }
+        psa_key_derivation_abort(&kdf_op);
+    }
+#endif
 
     /* u2 = pwd-value modulo p */
     MBEDTLS_MPI_CHK(
@@ -1575,10 +1967,10 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
         WPA3_EXT_LOG_MSG(("\n** WPA3-EXT-SUPP:P2 point VALID on ECP CURVE ret=%d **\n", ret));
     }
 
-    /* temp_point =  m * (P1) +  m * (P2) */
+    /* temp_point = m * (P1) + m * (P2), with m == 1, i.e. PT = P1 + P2 */
     MBEDTLS_MPI_CHK(
-            mbedtls_ecp_muladd(&crypto_ctxt->group, &PT, &m,
-                    (const mbedtls_ecp_point * )&P1, &m,
+            wpa3_crypto_point_add(&crypto_ctxt->group, &PT,
+                    (const mbedtls_ecp_point * )&P1,
                     (const mbedtls_ecp_point * )&P2));
 
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:PT xy point\n"));
@@ -1600,7 +1992,6 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
     mbedtls_ecp_point_free(&P1);
     mbedtls_ecp_point_free(&P2);
     mbedtls_ecp_point_free(&PT);
-    mbedtls_mpi_free(&m);
     mbedtls_mpi_free(&pwdval);
     mbedtls_md_free(&md_ctx);
     return ret;
@@ -1657,9 +2048,29 @@ cy_rslt_t wpa3_crypto_init(wpa3_supplicant_workspace_t *wksp) {
 
     memset(wksp->wpa3_crypto_ctxt, 0, sizeof(wpa3_crypto_context_info_t));
 
+#if defined(MBEDTLS_THREADING_ALT) && !defined(MBEDTLS_THREADING_C)
+#error "MBEDTLS_THREADING_ALT requires MBEDTLS_THREADING_C"
+#endif
+
 #if defined(MBEDTLS_THREADING_ALT)
+#if MBEDTLS_VERSION_MAJOR >= 4
     mbedtls_threading_set_alt(cy_mbedtls_mutex_init, cy_mbedtls_mutex_free,
-                              cy_mbedtls_mutex_lock, cy_mbedtls_mutex_unlock);
+                    cy_mbedtls_mutex_lock, cy_mbedtls_mutex_unlock,
+                    NULL, NULL, NULL, NULL, NULL);
+#else
+    mbedtls_threading_set_alt(cy_mbedtls_mutex_init, cy_mbedtls_mutex_free,
+                                cy_mbedtls_mutex_lock, cy_mbedtls_mutex_unlock);
+#endif /* MBEDTLS_VERSION_MAJOR >= 4 */
+#endif /* MBEDTLS_THREADING_ALT */
+
+#if MBEDTLS_VERSION_MAJOR >= 4
+    /* SAE runs during association, possibly before any TLS session has brought up
+     * the PSA core that the RNG draws from. psa_crypto_init() is idempotent. */
+    if (psa_crypto_init() != PSA_SUCCESS) {
+        free(wksp->wpa3_crypto_ctxt);
+        wksp->wpa3_crypto_ctxt = NULL;
+        return WPA3_EXT_CRYPTO_ERROR;
+    }
 #endif
 
     mbedtls_ecp_point_init(&wksp->wpa3_crypto_ctxt->sta_commit_element);
@@ -1670,8 +2081,10 @@ cy_rslt_t wpa3_crypto_init(wpa3_supplicant_workspace_t *wksp) {
     mbedtls_mpi_init(&wksp->wpa3_crypto_ctxt->sta_sae_rand);
     wksp->wpa3_crypto_ctxt->group_id = WPA3_SAE_ECP_GROUP_ID;
 
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ctr_drbg_init(&wksp->wpa3_crypto_ctxt->ctr_drbg);
     mbedtls_entropy_init(&wksp->wpa3_crypto_ctxt->entropy);
+#endif
 
     /* Initialize ECP group */
     MBEDTLS_MPI_CHK(
@@ -1685,8 +2098,11 @@ cleanup:
     mbedtls_mpi_free(&wksp->wpa3_crypto_ctxt->sta_private);
     mbedtls_ecp_point_free(&wksp->wpa3_crypto_ctxt->pwe);
     mbedtls_mpi_free(&wksp->wpa3_crypto_ctxt->sta_sae_rand);
+
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ctr_drbg_free(&wksp->wpa3_crypto_ctxt->ctr_drbg);
     mbedtls_entropy_free(&wksp->wpa3_crypto_ctxt->entropy);
+#endif
     free(wksp->wpa3_crypto_ctxt);
 
     return ret;
@@ -1704,8 +2120,11 @@ cy_rslt_t wpa3_crypto_deinit(wpa3_supplicant_workspace_t *wksp) {
     mbedtls_mpi_free(&wksp->wpa3_crypto_ctxt->sta_private);
     mbedtls_ecp_point_free(&wksp->wpa3_crypto_ctxt->pwe);
     mbedtls_mpi_free(&wksp->wpa3_crypto_ctxt->sta_sae_rand);
+
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ctr_drbg_free(&wksp->wpa3_crypto_ctxt->ctr_drbg);
     mbedtls_entropy_free(&wksp->wpa3_crypto_ctxt->entropy);
+#endif
     mbedtls_ecp_group_free(&wksp->wpa3_crypto_ctxt->group);
     memset(wksp->wpa3_crypto_ctxt, 0, sizeof(wpa3_crypto_context_info_t));
 
@@ -1734,10 +2153,20 @@ cy_rslt_t wpa3_crypto_gen_scalar_and_element(
 
     /* generate private and mask */
     /* 1 < private < q   */
-    wpa3_crypto_get_rand(&(workspace->wpa3_crypto_ctxt->group), &private, true);
+    ret = wpa3_crypto_get_rand(&(workspace->wpa3_crypto_ctxt->group), &private, true);
+    if (ret != CY_RSLT_SUCCESS) {
+        WPA3_EXT_LOG_MSG(
+                ("WPA3-EXT-SUPP:wpa3_crypto_get_rand failed!!\n"));
+        goto cleanup;
+    }
 
     /* 1 < mask    < q  */
-    wpa3_crypto_get_rand(&(workspace->wpa3_crypto_ctxt->group), &mask, true);
+    ret = wpa3_crypto_get_rand(&(workspace->wpa3_crypto_ctxt->group), &mask, true);
+    if (ret != CY_RSLT_SUCCESS) {
+        WPA3_EXT_LOG_MSG(
+                ("WPA3-EXT-SUPP:wpa3_crypto_get_rand failed!!\n"));
+        goto cleanup;
+    }
 
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:private"));
     WPA3_EXT_HEX_BIGNUM_DUMP((&private));
@@ -1959,7 +2388,6 @@ cy_rslt_t wpa3_crypto_compute_shared_secret(
     cy_rslt_t result = CY_RSLT_SUCCESS;
     mbedtls_ecp_point ecp_point;
     wpa3_crypto_context_info_t *crypto_ctxt;
-    mbedtls_mpi m;
     int ret;
 
     if (workspace == NULL) {
@@ -1967,11 +2395,7 @@ cy_rslt_t wpa3_crypto_compute_shared_secret(
     }
     crypto_ctxt = (wpa3_crypto_context_info_t *) workspace->wpa3_crypto_ctxt;
 
-    mbedtls_mpi_init(&m);
     mbedtls_ecp_point_init(&ecp_point);
-
-    /* set m = 1 */
-    MBEDTLS_MPI_CHK(mbedtls_mpi_lset(&m, 1));
 
     /*  K = F(scalar-op(private, element-op(peer-Element, scalar-op(peer-scalar, PE)))) */
     /*  If K is identity element (point-at-infinity) then reject */
@@ -1983,11 +2407,13 @@ cy_rslt_t wpa3_crypto_compute_shared_secret(
                     &(workspace->wpa3_sae_context_info.peer_commit_scalar),
                     &(crypto_ctxt->pwe), wpa3_crypto_random_number_generate, NULL));
 
-    /* temp_point =  m * (peer-Element) +  m * (ecp_point) */
+    /* temp_point = m * (peer-Element) + m * (ecp_point), with m == 1.
+     * Note the output aliases the second input; wpa3_crypto_point_add() only
+     * writes its result once every intermediate has been computed. */
     MBEDTLS_MPI_CHK(
-            mbedtls_ecp_muladd(&crypto_ctxt->group, &ecp_point, &m,
+            wpa3_crypto_point_add(&crypto_ctxt->group, &ecp_point,
                     (const mbedtls_ecp_point * )&(workspace->wpa3_sae_context_info.peer_commit_element),
-                    &m, (const mbedtls_ecp_point * )&ecp_point));
+                    (const mbedtls_ecp_point * )&ecp_point));
 
     /* ecp_point = scalar-op(private, temp_point) */
     MBEDTLS_MPI_CHK(
@@ -2018,7 +2444,6 @@ cy_rslt_t wpa3_crypto_compute_shared_secret(
     /*  confirm = H(kck | scalar | peer-scalar | Element | Peer-Element | <sender-id>) */
 
     cleanup: mbedtls_ecp_point_free(&ecp_point);
-    mbedtls_mpi_free(&m);
 
     return result;
 }
@@ -2052,6 +2477,8 @@ cy_rslt_t wpa3_crypto_derive_kck_pmk(wpa3_supplicant_workspace_t *workspace,
     if (ret != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:wpa3_crypto_derive_kck_pmk -->wpa3_supplicant_hmac_sha256 failed ret = %d\n", ret));
+        result = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:keyseed dump\n "));
@@ -2115,7 +2542,7 @@ cy_rslt_t wpa3_crypto_derive_kck_pmk(wpa3_supplicant_workspace_t *workspace,
 
 cy_rslt_t wpa3_crypto_get_peer_grp_id_scalar_element(
         wpa3_supplicant_workspace_t* workspace, uint8_t *buf) {
-    int ret;
+    int ret = CY_RSLT_SUCCESS;
     int len = 0;
     uint8_t ap_scalar_element_buf[WPA3_SAE_KEYSEED_KEY_LEN * 2 + 1] = { 0 };
     uint8_t ap_scalar_element_buf_len = 0;
@@ -2154,6 +2581,8 @@ cy_rslt_t wpa3_crypto_get_peer_grp_id_scalar_element(
         if (ret != CY_RSLT_SUCCESS) {
             WPA3_EXT_LOG_MSG(
                     ("WPA3-EXT-SUPP:mbedtls_ecp_point_read_binary of AP element failed ret=%d\n", ret));
+            ret = WPA3_EXT_CRYPTO_ERROR;
+            goto cleanup;
         }
 
         WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:xyz point of peer element"));
@@ -2177,7 +2606,7 @@ cy_rslt_t wpa3_crypto_get_peer_grp_id_scalar_element(
                     ("\n** WPA3-EXT-SUPP:peer Element xyz point VALID on ECP CURVE ret=%d **\n", ret));
         }
     }
-    cleanup: return CY_RSLT_SUCCESS;
+    cleanup: return ret;
 }
 
 cy_rslt_t wpa3_crypto_get_send_confirm(wpa3_supplicant_workspace_t* workspace,
@@ -2209,7 +2638,7 @@ cy_rslt_t wpa3_crypto_build_send_confirm_handshake(
      *               PEER-COMMIT-ELEMENT, commit-scalar, COMMIT-ELEMENT)
      */
 
-    int ret = 0;
+    int ret = CY_RSLT_SUCCESS;
     uint8_t confirm_data[WPA3_SAE_CONFIRM_DATA_MSG_LEN] = { 0 };
     uint8_t confirm[WPA3_SAE_KEYSEED_KEY_LEN] = { 0 };
 
@@ -2265,12 +2694,14 @@ cy_rslt_t wpa3_crypto_build_send_confirm_handshake(
 
     addr[4] = element2;
     len[4] = WPA3_SAE_ELEMENT_LEN;
-    wpa3_crypto_hmac_sha256(wksp->wpa3_sae_context_info.kck, WPA3_SAE_KCK_LEN,
+    ret = wpa3_crypto_hmac_sha256(wksp->wpa3_sae_context_info.kck, WPA3_SAE_KCK_LEN,
             5, addr, len, confirm);
 
     if (ret != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:wpa3_crypto_build_send_confirm_handshake failed ret = %d\n", ret));
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     WPA3_EXT_HEX_BUF_DUMP((confirm, WPA3_SAE_CONFIRM_LEN));
@@ -2283,14 +2714,14 @@ cy_rslt_t wpa3_crypto_build_send_confirm_handshake(
     memset(confirm, 0, sizeof(confirm));
     memset(confirm_data, 0, sizeof(confirm_data));
 
-    cleanup: return CY_RSLT_SUCCESS;
+    cleanup: return ret;
 }
 
 cy_rslt_t wpa3_crypto_verify_confirm_message(wpa3_supplicant_workspace_t *wksp) {
     cy_rslt_t result = CY_RSLT_SUCCESS;
     uint8_t verify[WPA3_SAE_KEYSEED_KEY_LEN] = { 0 };
     uint8_t temp[WPA3_SAE_CONFIRM_DATA_MSG_LEN] = { 0 };
-    int ret = 0;
+    int ret = CY_RSLT_SUCCESS;
 
     uint8_t *addr[5];
     size_t len[5];
@@ -2335,17 +2766,19 @@ cy_rslt_t wpa3_crypto_verify_confirm_message(wpa3_supplicant_workspace_t *wksp) 
 
     addr[4] = element2;
     len[4] = WPA3_SAE_ELEMENT_LEN;
-    wpa3_crypto_hmac_sha256(wksp->wpa3_sae_context_info.kck, WPA3_SAE_KCK_LEN,
+    ret = wpa3_crypto_hmac_sha256(wksp->wpa3_sae_context_info.kck, WPA3_SAE_KCK_LEN,
             5, addr, len, verify);
     if (ret != CY_RSLT_SUCCESS) {
         WPA3_EXT_LOG_MSG(
                 ("WPA3-EXT-SUPP:wpa3_crypto_build_send_confirm_handshake failed ret = %d\n", ret));
+        ret = WPA3_EXT_CRYPTO_ERROR;
+        goto cleanup;
     }
 
     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:verify dump\n"));
     WPA3_EXT_HEX_BUF_DUMP((verify, WPA3_SAE_CONFIRM_LEN));
 
-    result = memcmp(wksp->wpa3_sae_context_info.peer_confirm, verify,
+    result = wpa3_constant_time_memcmp(wksp->wpa3_sae_context_info.peer_confirm, verify,
             WPA3_SAE_CONFIRM_LEN);
 
     memset(verify, 0, sizeof(verify));
@@ -2357,7 +2790,7 @@ cy_rslt_t wpa3_crypto_verify_confirm_message(wpa3_supplicant_workspace_t *wksp) 
         return WPA3_EXT_SUPP_CONFIRM_VERIFY_FAILURE;
     }
 
-    cleanup: return result;
+    cleanup: return ret;
 }
 
 cy_rslt_t wpa3_crypto_get_send_confirm_handshake(

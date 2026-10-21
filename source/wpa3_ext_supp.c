@@ -1,5 +1,5 @@
 /*
- * (c) 2025, Infineon Technologies AG, or an affiliate of Infineon
+ * (c) 2026, Infineon Technologies AG, or an affiliate of Infineon
  * Technologies AG. All rights reserved.
  * This software, associated documentation and materials ("Software") is
  * owned by Infineon Technologies AG or one of its affiliates ("Infineon")
@@ -90,7 +90,12 @@ void wpa3_sae_statemachine ( cy_thread_arg_t arg )
                 case WPA3_SUPPLICANT_EVENT_COMPLETE:
                     WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:WPA3_SUPPLICANT_EVENT_COMPLETE received\n"));
                     wpa3_sae_handshake_complete(workspace);
+#ifdef CERT_MULTI_AKM
+                    /* keep the thread/queue and the auth-request registration alive for a future roam */
+                    workspace->wpa3_state = WPA3_SUPPLICANT_ACCEPTED_STATE;
+#else
                     workspace->wpa3_sae_statemachine_exit = true;
+#endif
                     break;
                 case WPA3_SUPPLICANT_EVENT_DELETE:
                     WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:WPA3_SUPPLICANT_EVENT_DELETE received\n"));
@@ -230,8 +235,21 @@ static void wpa3_sae_handle_auth_request( wpa3_supplicant_workspace_t * workspac
 
     memset(&sta_mac_addr, 0, sizeof(whd_mac_t));
 
-    if (( workspace->wpa3_state == WPA3_SUPPLICANT_NOTHING_STATE) && (msg->length == sizeof(whd_auth_req_status_t)))
+#ifdef CERT_MULTI_AKM
+    if ( ( ( workspace->wpa3_state == WPA3_SUPPLICANT_NOTHING_STATE ) ||
+            ( workspace->wpa3_state == WPA3_SUPPLICANT_ACCEPTED_STATE ) )
+            && ( msg->length == sizeof(whd_auth_req_status_t) ) )
     {
+        if ( workspace->wpa3_state == WPA3_SUPPLICANT_ACCEPTED_STATE )
+        {
+            /* roam-triggered re-auth on an already-accepted workspace: wipe stale crypto state */
+            wpa3_crypto_reset_for_new_handshake(workspace);
+            workspace->wpa3_state = WPA3_SUPPLICANT_NOTHING_STATE;
+        }
+#else
+    if ( ( workspace->wpa3_state == WPA3_SUPPLICANT_NOTHING_STATE ) && ( msg->length == sizeof(whd_auth_req_status_t) ) )
+    {
+#endif
         auth_req_status = (whd_auth_req_status_t *)msg->data;
         if ( auth_req_status == NULL )
         {
@@ -241,8 +259,25 @@ static void wpa3_sae_handle_auth_request( wpa3_supplicant_workspace_t * workspac
         if ( memcmp(workspace->wpa3_sae_auth_info.ssid, auth_req_status->ssid, auth_req_status->ssid_len) == 0 )
         {
             memcpy(workspace->wpa3_sae_auth_info.ap_bssid, auth_req_status->peer_mac.octet, ETHER_ADDR_LEN);
+#ifdef CERT_MULTI_AKM
+            /* TODO: Assuming Roam AP capability is same as original AP */
+            memcpy(workspace->wpa3_h2e_capable_bssid, auth_req_status->peer_mac.octet, ETH_ADDR_LEN);
+#endif
         }
         WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:event WPA3_SUPPLICANT_EVENT_AUTH_REQ h2e_support=%d\n", workspace->wpa3_h2e_capable));
+        /* If H2E was flagged during scan, verify it belongs to the actual selected AP's BSSID.
+         * A tri-band AP (same SSID on 2G/5G/6G) may have only its 6G BSS advertise RSNX/H2E.
+         * Without this check, the scan callback's last H2E result poisons wpa3_h2e_capable
+         * for all bands, causing H2E to be used against a 5G/2G BSS that only supports HnP.
+         */
+        if ( workspace->wpa3_h2e_capable &&
+             (memcmp(workspace->wpa3_sae_auth_info.ap_bssid,
+                     workspace->wpa3_h2e_capable_bssid, ETH_ADDR_LEN) != 0) )
+        {
+            WPA3_EXT_LOG_MSG(("WPA3-EXT-SUPP:H2E was set by a different BSSID, clearing for HnP on selected AP\n"));
+            workspace->wpa3_h2e_capable = false;
+            workspace->wpa3_h2e_method  = false;
+        }
 
         if ( workspace->wpa3_h2e_capable != WPA3_SAE_H2E_SUPPORTED )
         {
@@ -324,6 +359,14 @@ static void wpa3_sae_handle_rx_frame( wpa3_supplicant_workspace_t * workspace, w
     uint16_t auth_transaction = 0;
     whd_buffer_t buffer = NULL;
     uint8_t k[WPA3_SAE_KEYSEED_KEY_LEN] = {0};
+
+#ifdef CERT_MULTI_AKM
+    if ( workspace->wpa3_state == WPA3_SUPPLICANT_ACCEPTED_STATE )
+    {
+        /* stale frame from the old AP after acceptance; discard until a new AUTH_REQ resets state */
+        return;
+    }
+#endif
 
     if (( workspace->wpa3_state == WPA3_SUPPLICANT_NOTHING_STATE ) &&
         (msg->length >= WPA3_SAE_RX_FRAME_MIN_LENGTH))
@@ -1171,6 +1214,14 @@ void wpa3_supplicant_sae_cleanup(void)
     wksp = wpa3_sae_get_workspace();
     if(wksp)
     {
+#ifdef CERT_MULTI_AKM
+        if ( wksp->wpa3_state == WPA3_SUPPLICANT_ACCEPTED_STATE )
+        {
+            /* handshake already succeeded; keep workspace/thread alive for roam re-auth */
+            return;
+        }
+#endif
+
         if (wpa3_sae_workspace_cleanup_initiated == false)
         {
             wpa3_sae_cleanup_workspace();
@@ -1181,6 +1232,33 @@ void wpa3_supplicant_sae_cleanup(void)
         }
     }
 }
+
+#ifdef CERT_MULTI_AKM
+/**
+ * @brief Forces teardown of the SAE workspace regardless of handshake state.
+ *
+ * Unlike wpa3_supplicant_sae_cleanup(), this does not skip cleanup when the
+ * workspace is in WPA3_SUPPLICANT_ACCEPTED_STATE. Intended for the real
+ * disconnect path (cy_wcm_disconnect_ap()), not for post-connect-attempt cleanup.
+ */
+void wpa3_supplicant_sae_force_cleanup(void)
+{
+    wpa3_supplicant_workspace_t *wksp = NULL;
+
+    wksp = wpa3_sae_get_workspace();
+    if(wksp)
+    {
+        if (wpa3_sae_workspace_cleanup_initiated == false)
+        {
+            wpa3_sae_cleanup_workspace();
+        }
+        else  if ( wpa3_sae_supplicant_deinit_done == false)
+        {
+            wpa3_supplicant_deinit_workspace(wksp);
+        }
+    }
+}
+#endif
 
 cy_rslt_t wpa3_supplicant_sae_start (uint8_t *ssid, uint8_t ssid_len, uint8_t *passphrase, uint8_t passphrase_len)
 {
@@ -1674,6 +1752,11 @@ static void wpa3_sae_scan_callback(whd_scan_result_t **result_ptr, void *user_da
                     WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:H2E Capable AP:%x", scan_result->flags));
                     wksp->wpa3_h2e_capable = true;
                     wksp->wpa3_h2e_method = true;
+                    memcpy(wksp->wpa3_h2e_capable_bssid, scan_result->BSSID.octet, ETH_ADDR_LEN);
+                    WPA3_EXT_LOG_MSG(("\nWPA3-EXT-SUPP:H2E BSSID stored:%02x:%02x:%02x:%02x:%02x:%02x",
+                                     scan_result->BSSID.octet[0], scan_result->BSSID.octet[1],
+                                     scan_result->BSSID.octet[2], scan_result->BSSID.octet[3],
+                                     scan_result->BSSID.octet[4], scan_result->BSSID.octet[5]));
                 }
                 else
                 {

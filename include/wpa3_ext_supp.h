@@ -1,5 +1,5 @@
 /*
- * (c) 2025, Infineon Technologies AG, or an affiliate of Infineon
+ * (c) 2026, Infineon Technologies AG, or an affiliate of Infineon
  * Technologies AG. All rights reserved.
  * This software, associated documentation and materials ("Software") is
  * owned by Infineon Technologies AG or one of its affiliates ("Infineon")
@@ -171,7 +171,7 @@
 #include "wpa3_ext_crypto.h"
 
 #define WPA3_AUTH_DATA_BUF_LEN  (1024)
-#define WPA3_THREAD_STACK_SIZE  (1024 * 6)
+#define WPA3_THREAD_STACK_SIZE  (1024 * 14)
 
 #define WPA3_SUPPLICANT_QUEUE_SZ         10
 #define WPA3_SUPPLICANT_WAIT_FOREVER    (0xFFFFFFFF)
@@ -268,6 +268,7 @@ typedef struct wpa3_supplicant_workspace
     uint16_t                      wpa3_sae_anticlog_token_len;            /**< Anticlog token length          */
     wpa3_crypto_context_info_t*   wpa3_crypto_ctxt;                       /**< WPA3 Crypto context            */
     uint32_t                      wpa3_sae_sync;                          /**< WPA3 SAE sync                  */
+    uint8_t                       wpa3_h2e_capable_bssid[ETH_ADDR_LEN];  /**< BSSID of the AP that advertised H2E */
     cy_time_t                     start_time;                             /**< Start time                     */
     cy_time_t                     wpa3_handshake_start_time;              /**< WPA3 Handshake start time      */
     cy_time_t                     wpa3_handshake_current_time;            /**< WPA3 Handshake current time    */

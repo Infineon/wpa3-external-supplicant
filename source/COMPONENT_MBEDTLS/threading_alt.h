@@ -20,10 +20,26 @@
 #define THREADING_ALT_H
 
 #include "cyabs_rtos.h"
+#include <mbedtls/version.h>
+#if !defined(MBEDTLS_VERSION_MAJOR)
+#error "MBEDTLS_VERSION_MAJOR undefined - mbedtls/version.h not included"
+#endif
 
+#if MBEDTLS_VERSION_MAJOR >= 4
+#include <mbedtls/threading.h>
+#endif
+
+#if MBEDTLS_VERSION_MAJOR >= 4
+typedef struct {
+    /** mutex to protect mbedTLS buffer access */
+    cy_mutex_t tls_buf_mutex;
+} mbedtls_platform_mutex_t;
+typedef cy_mutex_t mbedtls_platform_condition_variable_t;
+#else
 typedef struct mbedtls_threading_mutex_t {
     /** mutex to protect mbedTLS buffer access */
     cy_mutex_t tls_buf_mutex;
 } mbedtls_threading_mutex_t;
+#endif
 
 #endif /* threading_alt.h */

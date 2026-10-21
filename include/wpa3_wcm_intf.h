@@ -1,5 +1,5 @@
 /*
- * (c) 2025, Infineon Technologies AG, or an affiliate of Infineon
+ * (c) 2026, Infineon Technologies AG, or an affiliate of Infineon
  * Technologies AG. All rights reserved.
  * This software, associated documentation and materials ("Software") is
  * owned by Infineon Technologies AG or one of its affiliates ("Infineon")
@@ -54,7 +54,7 @@ cy_rslt_t wpa3_supplicant_sae_start (uint8_t *ssid, uint8_t ssid_len, uint8_t *p
 
 /** This function waits for the SAE handshake completion and performs the cleanup (Success/Fail/Timeout)
  *
- * @return
+ * This function does not return a value.
   *******************************************************************************/
 void wpa3_supplicant_sae_cleanup(void);
 

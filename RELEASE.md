@@ -5,6 +5,12 @@ See the [README.md](./README.md) for a complete description of the WPA3 External
 
 ## Changelog
 
+### v2.0.0
+* Added support for MbedTLS v4.2.
+* Fix WPA3 connection in-case of same SSID across 3 wifi bands.
+* Documentation updates to make documentation AI-friendly, minor fixes for the assets to make them Hobsification-compatible and minor code update.
+* Minor bug fixes
+
 ### v1.3.1
 * Minor bug fixes
 
@@ -31,15 +37,3 @@ See the [README.md](./README.md) for a complete description of the WPA3 External
 ### v1.0.0
 * Initial release
 * 11n WPA3-R3(Personal) Certification Passed
-
-### Supported Software and Tools
-This version of the library was validated for compatibility with the following Software and Tools:
-
-| Software and Tools                                      | Version |
-| :---                                                    | :----:  |
-| ModusToolbox&trade; software                            | 3.6     |
-| ModusToolbox&trade; Device Configurator                 | 5.50.0  |
-| GCC Compiler                                            | 14.2.1  |
-| IAR Compiler (only for ModusToolbox&trade;)             | 9.50.2  |
-| Arm® Compiler 6                                         | 6.22    |
-| LLVM compiler                                           | 19.1.5  |

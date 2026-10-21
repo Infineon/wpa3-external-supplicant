@@ -1,5 +1,5 @@
 /*
- * (c) 2025, Infineon Technologies AG, or an affiliate of Infineon
+ * (c) 2026, Infineon Technologies AG, or an affiliate of Infineon
  * Technologies AG. All rights reserved.
  * This software, associated documentation and materials ("Software") is
  * owned by Infineon Technologies AG or one of its affiliates ("Infineon")
@@ -37,12 +37,25 @@
 
 #if defined (COMPONENT_MBEDTLS)
 
+#include <mbedtls/version.h>
+#if !defined(MBEDTLS_VERSION_MAJOR)
+#error "MBEDTLS_VERSION_MAJOR undefined - mbedtls/version.h not included"
+#endif
+
+#if MBEDTLS_VERSION_MAJOR >= 4
+#define MBEDTLS_DECLARE_PRIVATE_IDENTIFIERS
+#include <mbedtls/threading.h>
+#include "mbedtls/private/ecp.h"
+#include "mbedtls/md.h"
+#else
 #include "mbedtls/bignum.h"
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/entropy.h"
 #include "mbedtls/hmac_drbg.h"
 #include "mbedtls/ecdh.h"
 #include "mbedtls/hkdf.h"
+#endif
+
 
 #ifndef MBEDTLS_PRIVATE
 #define MBEDTLS_PRIVATE(member) member
@@ -68,8 +81,10 @@ typedef struct
 {
     mbedtls_ecp_group  group;                 /**< ECP group                          */
     mbedtls_ecp_point  pwe;                   /**< xy point(pwe)of the ECP Curve      */
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_entropy_context entropy;          /**< Entropy context                    */
     mbedtls_ctr_drbg_context ctr_drbg;        /**< CTR DBG context                    */
+#endif
     bool pwe_found;                           /**< PWE Element found                  */
     uint16_t group_id;                        /**< ECP group ID                       */
     uint8_t x_buf[WPA3_SAE_KEYSEED_KEY_LEN];  /**< x_buf in uint8_t*                  */
@@ -266,4 +281,12 @@ cy_rslt_t wpa3_crypto_init(struct wpa3_supplicant_workspace *wksp);
  * *******************************************************************************/
 cy_rslt_t wpa3_crypto_deinit(struct wpa3_supplicant_workspace *wksp);
 
+#ifdef CERT_MULTI_AKM
+/** This function resets the wpa3 cyrpto context
+ * @param   wksp       : The pointer to WPA3 supplicant workspace
+ * @return  cy_rslt_t  : CY_RSLT_SUCCESS
+ *                     : CY_RSLT_TYPE_ERROR
+ * *******************************************************************************/
+cy_rslt_t wpa3_crypto_reset_for_new_handshake(struct wpa3_supplicant_workspace *wksp);
+#endif
 #endif /* WPA3_EXT_CRYPTO_H_ */

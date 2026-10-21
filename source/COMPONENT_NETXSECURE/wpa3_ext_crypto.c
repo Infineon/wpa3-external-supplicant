@@ -1,5 +1,5 @@
 /*
- * (c) 2025, Infineon Technologies AG, or an affiliate of Infineon
+ * (c) 2026, Infineon Technologies AG, or an affiliate of Infineon
  * Technologies AG. All rights reserved.
  * This software, associated documentation and materials ("Software") is
  * owned by Infineon Technologies AG or one of its affiliates ("Infineon")
@@ -56,6 +56,59 @@ do {                                                                            
 } while(0)
 
 #define NX_CRYPTO_UNCOMPRESSED_POINT 0x04
+
+#ifdef CERT_MULTI_AKM
+cy_rslt_t wpa3_crypto_reset_for_new_handshake(wpa3_supplicant_workspace_t *wksp)
+{
+    UINT size;
+    HN_UBASE *scratch;
+    void *saved_sae_scratch;
+
+    if ( ( wksp == NULL ) || ( wksp->wpa3_crypto_ctxt == NULL ) ||
+         ( wksp->wpa3_crypto_ctxt->curve == NULL ) ||
+         ( wksp->wpa3_crypto_ctxt->scratch_buffer == NULL ) )
+    {
+        return WPA3_EXT_SUPP_ERROR;
+    }
+
+    size = wksp->wpa3_crypto_ctxt->curve->nx_crypto_ec_n.nx_crypto_huge_buffer_size;
+
+    /* wipe stale scalar/element/pwe bytes left over from the previous AP's handshake */
+    memset(wksp->wpa3_crypto_ctxt->scratch_buffer, 0, (size * 3 * 2) + (size * 2));
+    scratch = (HN_UBASE*)wksp->wpa3_crypto_ctxt->scratch_buffer;
+
+    NX_CRYPTO_EC_POINT_INITIALIZE(&wksp->wpa3_crypto_ctxt->sta_commit_element,
+            NX_CRYPTO_EC_POINT_AFFINE, scratch, size);
+    NX_CRYPTO_EC_POINT_INITIALIZE(&wksp->wpa3_crypto_ctxt->sta_pt_element,
+            NX_CRYPTO_EC_POINT_AFFINE, scratch, size);
+    NX_CRYPTO_EC_POINT_INITIALIZE(&wksp->wpa3_crypto_ctxt->pwe,
+            NX_CRYPTO_EC_POINT_AFFINE, scratch, size);
+    NX_CRYPTO_HUGE_NUMBER_INITIALIZE(&wksp->wpa3_crypto_ctxt->sta_scalar, scratch, size);
+    NX_CRYPTO_HUGE_NUMBER_INITIALIZE(&wksp->wpa3_crypto_ctxt->sta_private, scratch, size);
+
+    wksp->wpa3_crypto_ctxt->pwe_found = NX_CRYPTO_FALSE;
+    memset(wksp->wpa3_crypto_ctxt->x_buf, 0, sizeof(wksp->wpa3_crypto_ctxt->x_buf));
+    memset(wksp->wpa3_crypto_ctxt->y_buf, 0, sizeof(wksp->wpa3_crypto_ctxt->y_buf));
+    memset(wksp->wpa3_crypto_ctxt->py_buf, 0, sizeof(wksp->wpa3_crypto_ctxt->py_buf));
+    memset(wksp->wpa3_crypto_ctxt->confirm, 0, sizeof(wksp->wpa3_crypto_ctxt->confirm));
+
+    /* peer scalar/element live in wpa3_sae_context_info, backed by its own scratch buffer */
+    saved_sae_scratch = wksp->wpa3_sae_context_info.scratch_buffer;
+    memset(&wksp->wpa3_sae_context_info, 0, sizeof(wksp->wpa3_sae_context_info));
+    wksp->wpa3_sae_context_info.scratch_buffer = saved_sae_scratch;
+
+    if ( saved_sae_scratch != NULL )
+    {
+        memset(saved_sae_scratch, 0, size * 4);
+        scratch = (HN_UBASE*)saved_sae_scratch;
+        NX_CRYPTO_HUGE_NUMBER_INITIALIZE(&wksp->wpa3_sae_context_info.peer_commit_scalar, scratch, size);
+        NX_CRYPTO_EC_POINT_INITIALIZE(&wksp->wpa3_sae_context_info.peer_commit_element,
+                NX_CRYPTO_EC_POINT_AFFINE, scratch, size);
+    }
+
+    return CY_RSLT_SUCCESS;
+}
+#endif
 
 /**
  * @brief HKDF-Extract: create PRK from IKM and salt.
@@ -1805,9 +1858,9 @@ cy_rslt_t wpa3_crypto_derive_pt(wpa3_supplicant_workspace_t *wksp,
 
     /* pwd-seed = HKDF-Extract(ssid, password [|| identifier]) */
     ret = wpa3_crypto_hkdf_extract(hkdf_metadata, sizeof(hkdf_metadata),
-            (const UCHAR *) ssid, (size_t) strlen((const char *) ssid),
+            (const UCHAR *) ssid, (size_t) wksp->wpa3_sae_auth_info.ssid_len,
             (const UCHAR *) passphrase,
-            (size_t) strlen((const char *) passphrase),
+            (size_t) wksp->wpa3_sae_auth_info.passphrase_len,
             (UCHAR *) pwd_seed, sizeof(pwd_seed));
     if (ret != CY_RSLT_SUCCESS)
     {
